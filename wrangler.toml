@@ -5,7 +5,7 @@
 #   1. npm i -g wrangler  (or use npx wrangler)
 #   2. wrangler login     (browser-based auth, one-time)
 #   3. Set the Alchemy key as a secret (one-time):
-#      echo "5KzvyuwYMKCORBZUEgKE1" | wrangler secret put ALCHEMY_KEY
+#      echo "<your-alchemy-key>" | wrangler secret put ALCHEMY_KEY
 #   4. wrangler deploy
 #
 # The KV namespace WALLET_CACHE was created via dashboard. To use the same one
