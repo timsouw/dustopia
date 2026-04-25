@@ -147,9 +147,15 @@
 // Physics on CPU; ribbon geometry + atlas sampling in vertex shader.
 // ====================================================================
 
-const GRID             = 192;                  // 192² = 36864 particles per image (4× density bump from 96)
-const HISTORY_LEN      = 320;                   // GRID + GRID·SHEAR_FACTOR ≈ 192 + 106 = 298, rounded up
-const LANE_WIDTH       = 0.32 / 192;            // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical)
+// Mobile detection — phones can't push 1024×192² = 37M particles per frame.
+// On a coarse-pointer device we halve GRID, LIVE_TILE, and HISTORY_LEN, and
+// cap DPR more aggressively. Desktop is untouched.
+const IS_MOBILE = (typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches)
+                  || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '');
+
+const GRID             = IS_MOBILE ? 128 : 192;  // 192² = 36864 particles per image; mobile drops to 128² = 16384
+const HISTORY_LEN      = IS_MOBILE ? 256 : 320;  // ≥ GRID + GRID·SHEAR_FACTOR (mobile: 128 + 70 = 198, rounded up)
+const LANE_WIDTH       = 0.32 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical across GRID changes)
 const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
 const SHEAR_FACTOR     = 0.55;    // more skew for windswept look
 const WAVE_AMPLITUDE   = 0.033;  // +50% from 0.022
@@ -240,7 +246,7 @@ if (!DEBUG) { const f = document.getElementById('fps'); if (f) f.style.display =
 const API_URL      = 'https://api.dustopia.xyz';
 const ALCH_PAGE    = 100;
 const ALCH_MAX_PAG = 60;
-const LIVE_TILE    = 192;            // matches GRID — 192×192 px per token (16K-density atlas; ~113 MB GPU upload)
+const LIVE_TILE    = GRID;           // matches GRID — desktop 192×192, mobile 128×128 (atlas size scales with GRID²)
 const FETCH_CONC   = 12;
 const FETCH_TIMEOUT= 12000;
 const MAX_TOKENS   = 1024;           // safety ceiling for live render perf
@@ -587,7 +593,7 @@ async function main() {
     return;
   }
 
-  let DPR = Math.min(window.devicePixelRatio || 1, 2);
+  let DPR = Math.min(window.devicePixelRatio || 1, IS_MOBILE ? 1.5 : 2);
   let W = 0, H = 0;
   function resize() {
     W = window.innerWidth; H = window.innerHeight;
