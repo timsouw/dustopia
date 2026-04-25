@@ -73,21 +73,18 @@ That's it. There is no `node_modules`, no bundler, no transpiler. **Edit
 
 ## Live URLs
 
-- **Frontend (production)**: <https://dustopia.xyz>
+- **Frontend (production)**: <https://dustopia.xyz> — Cloudflare Pages,
+  auto-deployed from `main` of this repo.
 - **API Worker**: <https://api.dustopia.xyz/api/health> → returns `{"ok":true}`
-- **Legacy frontend** (Worker static-assets): <https://withered-leaf-3b78.cryptokynata.workers.dev>
-  — being replaced by Cloudflare Pages deploy from this repo
-- **Legacy API URL**: <https://franken-api.cryptokynata.workers.dev> — same
-  Worker as `api.dustopia.xyz`, kept working for backward compat
+- **Pages preview**: <https://dustopia.pages.dev>
 
 ## Cloudflare account
 
-- Account: `Cryptokynata@gmail.com`
-- Account ID: `245c03682858d0c1200c5c577eb25da7`
-- Domain: `dustopia.xyz` (registered through Cloudflare; nameservers
-  `jeff.ns.cloudflare.com`, `lina.ns.cloudflare.com`)
-- Workers & Pages projects: `franken-api`, `withered-leaf-3b78`
-- KV namespace: `WALLET_CACHE` (id: `043aff23e1894533b81aaab958718377`)
+- Domain: `dustopia.xyz` (registered through Cloudflare)
+- Workers & Pages projects:
+  - `dustopia` (Pages, static frontend, GitHub-connected to this repo)
+  - `franken-api` (Worker, API at `api.dustopia.xyz`)
+- KV namespace: `WALLET_CACHE` (id lives in `wrangler.toml`)
 - Worker secrets: `ALCHEMY_KEY` (Alchemy NFT API key — never commit it)
 
 ## Alchemy
@@ -223,17 +220,12 @@ cache survives reloads (30min TTL).
 
 ### Frontend
 
-If Cloudflare Pages is connected to this repo:
+Cloudflare Pages is connected to this repo and auto-deploys on push:
 
 ```bash
-git push
-# Cloudflare Pages auto-builds and deploys to dustopia.xyz within ~30s
+git push origin main
+# Pages builds and deploys to dustopia.xyz within ~30s
 ```
-
-If not yet connected (manual upload via dashboard):
-
-1. Drag the repo root folder onto the Worker static-assets uploader, OR
-2. Set up Pages → Connect to Git → select this repo
 
 ### Worker (`worker.js`)
 
