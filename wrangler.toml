@@ -1,0 +1,28 @@
+# Wrangler config for the API Worker (api.dustopia.xyz).
+# Deploy with: `wrangler deploy`
+#
+# First-time setup:
+#   1. npm i -g wrangler  (or use npx wrangler)
+#   2. wrangler login     (browser-based auth, one-time)
+#   3. Set the Alchemy key as a secret (one-time):
+#      echo "5KzvyuwYMKCORBZUEgKE1" | wrangler secret put ALCHEMY_KEY
+#   4. wrangler deploy
+#
+# The KV namespace WALLET_CACHE was created via dashboard. To use the same one
+# from CLI, the namespace ID below must match. Get it via:
+#   wrangler kv:namespace list
+
+name = "franken-api"
+main = "worker.js"
+compatibility_date = "2024-10-01"
+
+# KV binding — points to the WALLET_CACHE namespace already created in dashboard.
+# Replace the id with the actual namespace id (from `wrangler kv:namespace list`).
+[[kv_namespaces]]
+binding = "WALLET_CACHE"
+id      = "043aff23e1894533b81aaab958718377"
+
+# Custom domain
+routes = [
+  { pattern = "api.dustopia.xyz", custom_domain = true }
+]

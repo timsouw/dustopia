@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Wrangler / Cloudflare
+.wrangler/
+.dev.vars
+.mf/
+
+# Node (if we ever add tooling)
+node_modules/
+package-lock.json
+*.log
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Local-only
+local/
+tmp/

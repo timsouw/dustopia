@@ -1,0 +1,1473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dustopia</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#07080c; font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif; color:#e7e7ea; }
+  #stage { position:fixed; inset:0; display:block; background:#07080c; }
+
+  #fps { position:fixed; bottom:10px; right:14px; font-size:10px; color:#55555e; font-variant-numeric:tabular-nums; }
+  #loader { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#07080c; z-index:100; font-size:12px; color:#8a8a95; }
+  #err { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#12141a; border:1px solid #2a2d36; color:#e7e7ea; padding:20px 24px; border-radius:10px; max-width:560px; display:none; font-size:12px; line-height:1.5; z-index:200; }
+  #err code { background:#1c1f28; padding:2px 5px; border-radius:3px; font-family:"SF Mono",monospace; font-size:11px; color:#cfd1d7; }
+  #hint { position:fixed; bottom:10px; left:50%; transform:translateX(-50%); font-size:10px; color:#45454d; letter-spacing:.04em; pointer-events:none; user-select:none; }
+
+  /* --- light theme override (body.light) --- */
+  body.light, body.light #stage { background:#f4f4f5; }
+  body.light { color:#18181b; }
+  body.light #fps          { color:#a1a1aa; }
+  body.light #loader       { background:#f4f4f5; color:#71717a; }
+  body.light #hint         { color:#c4c4c8; }
+  body.light #err          { background:#fafafa; border-color:#e4e4e7; color:#18181b; }
+  body.light #err code     { background:#e4e4e7; color:#27272a; }
+
+  /* --- live load panel --- */
+  #loadPanel {
+    position:fixed; top:16px; left:50%; transform:translateX(-50%);
+    width:min(380px, calc(100vw - 24px));
+    background:rgba(16,18,24,0.78); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border:1px solid rgba(255,255,255,0.08); border-radius:12px;
+    padding:14px; font-size:12px; line-height:1.4;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    z-index: 50;
+  }
+  #loadPanel h1 { font-size:13px; font-weight:500; letter-spacing:0; color:#e7e7ea; margin:0; }
+  #loadPanel .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:8px; }
+  #loadPanel .head-actions { display:flex; gap:6px; align-items:center; }
+  #themeBtn, #copyBtn {
+    background:transparent; border:1px solid rgba(255,255,255,.18); color:#9a9aa5;
+    font-family:inherit; font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+    padding:3px 8px; border-radius:4px; cursor:pointer;
+  }
+  #themeBtn:hover, #copyBtn:hover { color:#e7e7ea; border-color:#e7e7ea; }
+  body.light #themeBtn, body.light #copyBtn { border-color:rgba(0,0,0,.18); color:#71717a; }
+  body.light #themeBtn:hover, body.light #copyBtn:hover { color:#18181b; border-color:#18181b; }
+  #loadPanel .row { display:flex; gap:6px; margin-bottom:8px; }
+  #loadPanel input {
+    flex:1; padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,.12);
+    background:rgba(0,0,0,.35); color:#e7e7ea; font-family:inherit; font-size:12px; outline:none;
+  }
+  #loadPanel input:focus { border-color:#e7e7ea; }
+  #loadPanel #load {
+    padding:8px 14px; border-radius:6px; border:0; background:#e7e7ea; color:#101217;
+    font-family:inherit; font-weight:600; font-size:12px; cursor:pointer;
+  }
+  #loadPanel #load:disabled { opacity:.4; cursor:not-allowed; }
+  #status { font-size:11px; color:#8a8a95; min-height:14px; white-space:pre-wrap; margin-top:6px; }
+  #status .ok   { color:#9fe8c0; }
+  #status .err  { color:#ff7e7e; }
+  #status .warn { color:#fbbf24; }
+  #examples { margin-top:6px; font-size:10.5px; color:#8a8a95; }
+  #examples a { color:#cfd1d7; cursor:pointer; text-decoration:underline; text-decoration-color:rgba(255,255,255,.18); margin-right:8px; }
+  #examples a:hover { text-decoration-color:#cfd1d7; }
+  #progress {
+    height:2px; background:rgba(255,255,255,.08); border-radius:1px;
+    overflow:hidden; margin:8px 0; opacity:0;
+    transition:opacity 200ms;
+  }
+  #progress.active { opacity:1; }
+  #progress > div {
+    height:100%; background:#e7e7ea;
+    width:0%; transition:width 100ms linear;
+  }
+
+  /* Collapsed state (after successful load) */
+  #loadPanel.collapsed {
+    width:auto; padding:8px 12px; cursor:pointer;
+  }
+  #loadPanel.collapsed > *:not(.head) { display:none; }
+  #loadPanel.collapsed .head { margin:0; }
+  #loadPanel.collapsed h1 { font-size:11px; text-transform:none; letter-spacing:.02em; color:#e7e7ea; cursor:pointer; }
+  body.light #loadPanel.collapsed h1 { color:#18181b; }
+
+  body.light #loadPanel { background:rgba(250,250,252,.86); border-color:rgba(0,0,0,.08); }
+  body.light #loadPanel h1 { color:#71717a; }
+  body.light #loadPanel input { background:#fff; color:#18181b; border-color:rgba(0,0,0,.12); }
+  body.light #loadPanel input:focus { border-color:#18181b; }
+  body.light #loadPanel #load { background:#18181b; color:#fafafa; }
+  body.light #status { color:#71717a; }
+  body.light #status .ok    { color:#047857; }
+  body.light #status .err   { color:#b91c1c; }
+  body.light #status .warn  { color:#b45309; }
+  body.light #examples { color:#a1a1aa; }
+  body.light #examples a { color:#27272a; }
+  body.light #examples a:hover { text-decoration-color:#18181b; }
+  body.light #progress { background:rgba(0,0,0,.08); }
+  body.light #progress > div { background:#18181b; }
+</style>
+</head>
+<body class="light">
+
+<canvas id="stage"></canvas>
+<script>
+  // Apply persisted theme BEFORE first paint to avoid a flash.
+  // Default = light. The toggle button is wired up at script init below.
+  (function() {
+    const saved = localStorage.getItem('franken-theme');
+    if (saved === 'dark') document.body.classList.remove('light');
+    else                  document.body.classList.add('light');
+  })();
+</script>
+<div id="loader" style="display:none">loading tokens…</div>
+<div id="err"></div>
+<div id="hint" style="display:none">drag or two-finger swipe to rotate · scroll or pinch to zoom</div>
+
+<div id="loadPanel">
+  <div class="head">
+    <h1>dustopia</h1>
+    <div class="head-actions">
+      <button id="copyBtn" title="copy link" style="display:none">copy link</button>
+      <button id="themeBtn" title="toggle theme">☾ Dark</button>
+    </div>
+  </div>
+  <div class="row">
+    <input id="addr" type="text" placeholder="xcopy.eth or 0x…" autocomplete="off" autocapitalize="off" autocorrect="off" inputmode="text" spellcheck="false" autofocus />
+    <button id="load">Load</button>
+  </div>
+  <div id="examples">
+    try:
+    <a data-addr="timso.eth">timso.eth</a>
+    <a data-addr="xcopy.eth">xcopy.eth</a>
+    <a data-addr="punk6529.eth">punk6529.eth</a>
+  </div>
+  <div id="progress"><div></div></div>
+  <div id="status">enter wallet to start.</div>
+</div>
+
+<div id="fps"></div>
+
+<script>
+// ====================================================================
+// FRANKENSTEIN — WebGL2 POINTS renderer
+// N tokens × GRID² cells = up to 1024 × 2304 particles per frame
+// Physics on CPU; ribbon geometry + atlas sampling in vertex shader.
+// ====================================================================
+
+const GRID             = 192;                  // 192² = 36864 particles per image (4× density bump from 96)
+const HISTORY_LEN      = 320;                   // GRID + GRID·SHEAR_FACTOR ≈ 192 + 106 = 298, rounded up
+const LANE_WIDTH       = 0.32 / 192;            // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical)
+const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
+const SHEAR_FACTOR     = 0.55;    // more skew for windswept look
+const WAVE_AMPLITUDE   = 0.033;  // +50% from 0.022
+const WIND_AMP_LOW     = 0.014;   // per-pixel spatial wind displacement (low-freq, image-coherent)
+const WIND_AMP_HIGH    = 0.004;   // per-pixel wispy jitter (high-freq)
+
+// --- school-of-fish flocking ---
+const FLOCK_ALIGN      = 0.55;    // weight: pull forward toward collection's average heading
+const FLOCK_COHESION   = 0.35;    // weight: pull position toward collection centroid (past a soft radius)
+
+// --- pole-avoidance: prevent clusters from getting stuck spinning in tight
+// circles at the ±Y poles (sphere singularity). When a token's |y| exceeds
+// the threshold, push it back toward the equator. Strength ramps linearly
+// from 0 at the threshold to MAX at the pole.
+const POLE_THRESHOLD   = 0.65;    // ~50° from equator — beyond this, push starts
+const POLE_PUSH_MAX    = 0.55;    // max equator-bias added to vbuf at the pole
+const FLOCK_REST_ARC   = 0.18;    // no cohesion pull within this arc distance (≈10°)
+
+// --- inter-collection separation (Reynolds rule #3): push collections away
+// from each other so they spread evenly across the sphere instead of clumping
+// in one hemisphere. Operates on collection centroids each frame.
+const SEPARATION_RADIUS   = 1.1;   // ≈63° of arc — only push when truly nearby
+const SEPARATION_STRENGTH = 0.20;  // gentler — was 0.45, caused "rocket-stripe" look on close encounters
+
+// --- collection-wide big waves ---
+const BIG_WAVE_MIN     = 5;                  // collections with ≥ this many tokens get synced waves
+const BIG_WAVE_AMP     = WAVE_AMPLITUDE * 2.6; // ~2.6× per-token amplitude
+const BIG_WAVE_FREQ    = 0.6;                // slower than per-token wave
+const ATLAS_TILES_ROW  = 32;
+const SPHERE_FACTOR    = 0.032;  // halved from 0.064 — denser packing
+const SPHERE_SCALE_A   = 0.42;
+const SPHERE_SCALE_B   = 0.09;   // tamer than 0.17 — with N=500 the growth is already huge
+// Hard floor + cap (% of min(W,H)) so low-N wallets still look filled and high-N
+// wallets can't escape the viewport. Floor is what fixes the "1 token = invisible" case.
+const SPHERE_FRAC_MIN  = 0.20;   // never smaller than 20% of the shorter viewport edge
+const SPHERE_FRAC_MAX  = 0.23;   // tightened from 0.25 to leave room for outer-layer collections
+
+// --- collection layering: each collection lives on one of LAYER_COUNT concentric shells ---
+// The base unit sphere is r=1.0. Inner shells (<1.0) sit closer to center, outer (>1.0)
+// further out. Adds depth: as the orb rotates, near layers occlude far layers.
+const LAYER_COUNT      = 4;
+const LAYER_INNER_R    = 0.78;   // inner-most shell
+const LAYER_OUTER_R    = 1.18;   // outer-most shell
+
+function showError(msg) {
+  const e = document.getElementById('err');
+  e.style.display = 'block';
+  e.innerHTML = msg;
+  document.getElementById('loader').style.display = 'none';
+}
+
+// Deterministic PRNG (mulberry32). Seeded from the wallet address so
+// every run of this wallet produces the identical animation — important
+// for the NFT-deployment path where the on-chain output must be reproducible.
+function mulberry32(seed) {
+  let s = seed >>> 0;
+  return function() {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function seedFromString(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+// =============================================================
+// DEBUG flag: ?debug=1 in URL exposes the FPS counter.
+// =============================================================
+const DEBUG = /[?&]debug=1/.test(location.search);
+if (!DEBUG) { const f = document.getElementById('fps'); if (f) f.style.display = 'none'; }
+
+// =============================================================
+// LIVE DATA PIPELINE (Alchemy → in-memory meta + binBuf)
+// Replaces the original `fetch('tokens.bin')` path. Output shape matches
+// what main() expects: meta { count, lods, offsets, tokens } + binBuf with
+// N×tileSize×tileSize×3 bytes of RGB8 starting at offset 0.
+// =============================================================
+// API_URL points to our Cloudflare Worker proxy. The Worker hides the Alchemy
+// key, caches responses in KV, and adds retries. Replace with your deployed
+// Worker URL (or a custom domain like https://franken.xyz once configured).
+//
+// While developing: set to '' (empty string) to fall back to direct Alchemy
+// calls — useful for local testing before the Worker is deployed.
+const API_URL      = 'https://franken-api.cryptokynata.workers.dev';   // ← REPLACE after deploying Worker
+const ALCH_PAGE    = 100;
+const ALCH_MAX_PAG = 60;
+const LIVE_TILE    = 192;            // matches GRID — 192×192 px per token (16K-density atlas; ~113 MB GPU upload)
+const FETCH_CONC   = 12;
+const FETCH_TIMEOUT= 12000;
+const MAX_TOKENS   = 1024;           // safety ceiling for live render perf
+
+const statusEl = () => document.getElementById('status');
+function setStatus(html) { const el = statusEl(); if (el) el.innerHTML = html; }
+
+// Robust fetch: retries on transient failures (429/500/502/503/504) with
+// exponential backoff, plus 15s AbortController timeout per attempt. Throws
+// only on permanent failure (4xx other than 429) or after retries exhausted.
+async function fetchWithRetry(url, opts = {}) {
+  const RETRIABLE = new Set([429, 500, 502, 503, 504]);
+  const MAX_ATTEMPTS = 4;
+  const BASE_DELAY = 250;            // 250ms → 750ms → 2.25s → 6.75s
+  const TIMEOUT_MS = 15000;
+  let lastErr;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      const r = await fetch(url, { ...opts, signal: ctrl.signal });
+      clearTimeout(timer);
+      if (r.ok) return r;
+      // Non-retriable error (4xx other than 429): fail fast
+      if (!RETRIABLE.has(r.status)) {
+        throw new Error(`HTTP ${r.status}`);
+      }
+      lastErr = new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      clearTimeout(timer);
+      lastErr = e.name === 'AbortError' ? new Error('timeout') : e;
+    }
+    if (attempt < MAX_ATTEMPTS - 1) {
+      const delay = BASE_DELAY * Math.pow(3, attempt);
+      await new Promise(res => setTimeout(res, delay));
+    }
+  }
+  throw lastErr;
+}
+
+async function resolveENSLive(name) {
+  const url = API_URL
+    ? `${API_URL}/api/ens/${encodeURIComponent(name)}`
+    : `https://api.ensideas.com/ens/resolve/${encodeURIComponent(name)}`;
+  const r = await fetchWithRetry(url);
+  const j = await r.json();
+  if (!j.address) throw new Error(`ENS not found for ${name}`);
+  return j.address;
+}
+
+async function fetchAllNFTsLive(owner, onProgress) {
+  let all = [], pageKey = null;
+  for (let p = 0; p < ALCH_MAX_PAG; p++) {
+    let u;
+    if (API_URL) {
+      // Through our Worker proxy: /api/wallet/<address>?pageKey=...
+      u = new URL(`${API_URL}/api/wallet/${owner}`);
+      if (pageKey) u.searchParams.set('pageKey', pageKey);
+    } else {
+      // Fallback: direct Alchemy call (local dev only — exposes API key).
+      u = new URL('https://eth-mainnet.g.alchemy.com/nft/v3/YOUR_KEY/getNFTsForOwner');
+      u.searchParams.set('owner', owner);
+      u.searchParams.set('pageSize', ALCH_PAGE);
+      u.searchParams.set('withMetadata', 'true');
+      u.searchParams.set('excludeFilters[]', 'SPAM');
+      if (pageKey) u.searchParams.set('pageKey', pageKey);
+    }
+    const r = await fetchWithRetry(u);
+    const j = await r.json();
+    all = all.concat(j.ownedNfts || []);
+    if (onProgress) onProgress(all.length, j.totalCount);
+    if (!j.pageKey) break;
+    pageKey = j.pageKey;
+  }
+  return all;
+}
+
+// Returns ordered list of fallback URLs for one NFT. Tried in order — first
+// one that successfully loads + decodes wins. thumbnailUrl is Alchemy's
+// CDN-cached small render with reliable CORS; the others are larger but
+// less reliable (older collections often have dead pngUrl/cachedUrl).
+function pickImageUrls(nft) {
+  const img = nft.image || {};
+  const urls = [];
+  if (img.thumbnailUrl) urls.push(img.thumbnailUrl);
+  if (img.cachedUrl)    urls.push(img.cachedUrl);
+  if (img.pngUrl)       urls.push(img.pngUrl);
+  return urls;
+}
+// Backward-compat shim — first URL only.
+function pickThumbUrlLive(nft) {
+  const urls = pickImageUrls(nft);
+  return urls.length ? urls[0] : null;
+}
+
+function loadImageWithTimeoutLive(url, ms) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    let settled = false;
+    const finish = v => { if (!settled) { settled = true; resolve(v); } };
+    const timer = setTimeout(() => finish(null), ms);
+    img.onload  = () => { clearTimeout(timer); finish(img.naturalWidth > 0 ? img : null); };
+    img.onerror = () => { clearTimeout(timer); finish(null); };
+    img.src = url;
+  });
+}
+
+// Try each URL in `urlList` in order; first one that loads successfully wins.
+// Lets us recover from CORS-broken pngUrls by falling through to thumbnailUrl.
+async function loadImageWithFallback(urlList, ms) {
+  for (const url of urlList) {
+    if (!url) continue;
+    const img = await loadImageWithTimeoutLive(url, ms);
+    if (img) return img;
+  }
+  return null;
+}
+
+async function fetchImagesParallelLive(urlLists, concurrency, onProgress) {
+  const results = new Array(urlLists.length);
+  let done = 0, next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= urlLists.length) return;
+      results[i] = await loadImageWithFallback(urlLists[i], FETCH_TIMEOUT);
+      done++;
+      if (onProgress) onProgress(done, urlLists.length);
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  return results;
+}
+
+// Build the prototype's expected (meta, binBuf) from a list of {nft, image} pairs.
+// Layout: binBuf = N * LIVE_TILE * LIVE_TILE * 3 bytes RGB8, contiguous tiles.
+function buildAtlasBinary(pairs) {
+  const N = pairs.length;
+  const tileSize = LIVE_TILE;
+  // Use a single 2D canvas big enough to hold one tile, redraw + extract per token.
+  const c = document.createElement('canvas');
+  c.width = tileSize; c.height = tileSize;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const bin = new Uint8Array(N * tileSize * tileSize * 3);
+  const tokens = new Array(N);
+  for (let i = 0; i < N; i++) {
+    const { nft, image } = pairs[i];
+    ctx.clearRect(0, 0, tileSize, tileSize);
+    if (image) {
+      try { ctx.drawImage(image, 0, 0, tileSize, tileSize); }
+      catch { /* tainted — leave black */ }
+    }
+    let rgba;
+    try { rgba = ctx.getImageData(0, 0, tileSize, tileSize).data; }
+    catch { rgba = new Uint8ClampedArray(tileSize * tileSize * 4); }
+    // strip alpha → RGB into bin at the right offset
+    const dst = i * tileSize * tileSize * 3;
+    for (let p = 0, q = dst; p < rgba.length; p += 4, q += 3) {
+      bin[q]   = rgba[p];
+      bin[q+1] = rgba[p+1];
+      bin[q+2] = rgba[p+2];
+    }
+    const cName = (nft.contract && nft.contract.name) || (nft.contract && nft.contract.address) || 'unknown';
+    const tokenId = (nft.tokenId != null) ? String(nft.tokenId) : '';
+    tokens[i] = { collection: cName, tokenId };
+  }
+  const meta = {
+    count: N,
+    lods:  [tileSize],
+    offsets: { ['lod' + tileSize]: 0 },
+    tokens,
+  };
+  return { meta, binBuf: bin.buffer };
+}
+
+function setProgress(pct, active) {
+  const wrap = document.getElementById('progress');
+  if (!wrap) return;
+  const bar = wrap.firstElementChild;
+  if (active) wrap.classList.add('active'); else wrap.classList.remove('active');
+  if (bar) bar.style.width = (pct * 100).toFixed(1) + '%';
+}
+
+async function buildLiveData(input) {
+  setStatus(`<span>resolving…</span>`);
+  let addr = input.trim();
+  if (!addr) throw new Error('empty input');
+  const original = addr;            // preserve ENS form for display + URL
+  let isEns = false;
+  if (/\.eth$/i.test(addr)) {
+    isEns = true;
+    addr = await resolveENSLive(addr);
+    const shortRes = `${addr.slice(0,6)}…${addr.slice(-4)}`;
+    setStatus(`<span class="ok">✓ resolved ${original} &rarr; ${shortRes}</span>`);
+    await new Promise(r => setTimeout(r, 800));
+  } else if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    throw new Error('not a valid ENS (.eth) or 0x address');
+  }
+  const short = `${addr.slice(0,6)}…${addr.slice(-4)}`;
+  setStatus(`<span>fetching NFTs for ${short}…</span>`);
+  const nfts = await fetchAllNFTsLive(addr, (cnt, total) => {
+    setStatus(`<span>fetching NFTs · ${cnt}${total ? ' / ~' + total : ''}</span>`);
+  });
+  // Filter: not spam + has at least one image URL
+  const candidates = [];
+  for (const n of nfts) {
+    if (n.isSpam) continue;
+    const urls = pickImageUrls(n);
+    if (!urls.length) continue;
+    candidates.push({ nft: n, urls });
+  }
+  if (!candidates.length) throw new Error('no renderable NFTs in wallet');
+  const used = candidates.slice(0, MAX_TOKENS);
+  setStatus(`<span>fetching ${used.length} images…</span>`);
+  setProgress(0, true);
+  const imgs = await fetchImagesParallelLive(
+    used.map(c => c.urls), FETCH_CONC,
+    (d, t) => {
+      setStatus(`<span>fetching images · ${d} / ${t}</span>`);
+      setProgress(d / Math.max(1, t), true);
+    },
+  );
+  setProgress(0, false);
+  // Pair only tokens with successfully loaded images
+  const pairs = [];
+  for (let i = 0; i < used.length; i++) {
+    if (imgs[i]) pairs.push({ nft: used[i].nft, image: imgs[i] });
+  }
+  if (!pairs.length) throw new Error('all image fetches failed (CORS?)');
+  const failed = used.length - pairs.length;
+  setStatus(`<span>building atlas (${pairs.length} tokens)…</span>`);
+  const { meta, binBuf } = buildAtlasBinary(pairs);
+  return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length };
+}
+
+function waitForLoadAndBuild() {
+  return new Promise(resolve => {
+    const btn   = document.getElementById('load');
+    const input = document.getElementById('addr');
+    const LOAD_LABEL = btn.textContent;
+    async function go() {
+      btn.disabled = true;
+      btn.textContent = 'Loading…';
+      try {
+        const data = await buildLiveData(input.value);
+        const failPct = data.totalRequested > 0 ? data.failed / data.totalRequested : 0;
+        if (failPct > 0.3) {
+          const pct = Math.round(failPct * 100);
+          setStatus(`<span class="ok">✓ ${data.meta.count} tokens</span> <span class="warn">(${pct}% failed to load)</span>`);
+        } else {
+          setStatus(`<span class="ok">✓ ${data.meta.count} tokens · rendering…</span>`);
+        }
+        resolve(data);
+      } catch (e) {
+        console.error(e);
+        setStatus(`<span class="err">✗ ${e.message}</span>`);
+        btn.disabled = false;
+        btn.textContent = LOAD_LABEL;
+      }
+    }
+    btn.addEventListener('click', go);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter')  go();
+      if (e.key === 'Escape') { input.value = ''; input.blur(); }
+    });
+    document.querySelectorAll('#examples a').forEach(a => {
+      a.addEventListener('click', () => { input.value = a.dataset.addr; go(); });
+    });
+    // hash auto-load: franken_live_v2.html#xcopy.eth
+    const hash = decodeURIComponent(location.hash.replace(/^#/, ''));
+    if (hash) { input.value = hash; setTimeout(go, 50); }
+  });
+}
+
+async function main() {
+  // =============================================================
+  // 1) WAIT FOR USER + LIVE BUILD
+  // =============================================================
+  const built = await waitForLoadAndBuild();
+  const { meta, binBuf, walletAddr: liveWalletAddr } = built;
+  const displayName = built.isEns ? built.originalInput
+                                  : `${built.walletAddr.slice(0,6)}…${built.walletAddr.slice(-4)}`;
+
+  // Update page title + URL hash so the wallet is shareable.
+  document.title = `${displayName} · dustopia`;
+  history.replaceState(null, '', '#' + (built.isEns ? built.originalInput : built.walletAddr));
+
+  // Collapse the load panel into a small pill that stays clickable.
+  // The h1 inside displays the loaded wallet's ENS or short 0x address.
+  setTimeout(() => {
+    const lp = document.getElementById('loadPanel');
+    if (!lp) return;
+    const head  = lp.querySelector('.head');
+    const h1    = lp.querySelector('h1');
+    const input = document.getElementById('addr');
+    const loadBtn = document.getElementById('load');
+    if (h1) h1.textContent = displayName;
+    lp.classList.add('collapsed');
+    // Reveal the copy-link button now that we have a shareable hash.
+    const copyBtn = document.getElementById('copyBtn');
+    if (copyBtn) {
+      copyBtn.style.display = '';
+      copyBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        navigator.clipboard?.writeText(location.href);
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = 'copied!';
+        setTimeout(() => { copyBtn.textContent = orig; }, 1200);
+      });
+    }
+    // Click the head/h1 to re-expand.
+    head?.addEventListener('click', (e) => {
+      if (e.target.id === 'copyBtn' || e.target.closest('#copyBtn')) return;
+      if (e.target.id === 'themeBtn' || e.target.closest('#themeBtn')) return;
+      if (!lp.classList.contains('collapsed')) return;
+      lp.classList.remove('collapsed');
+      if (h1) h1.textContent = 'dustopia';
+      if (loadBtn) { loadBtn.disabled = false; loadBtn.textContent = 'Load'; }
+      if (input) { input.focus(); input.select(); }
+    });
+  }, 200);
+
+  const N = meta.count;
+  const tileSize = meta.lods[0];   // always 96 in live mode (LIVE_TILE)
+
+  // =============================================================
+  // 2) SETUP GL
+  // =============================================================
+  const canvas = document.getElementById('stage');
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+  if (!gl) {
+    showError('<b>WebGL2 not available.</b> Try a recent Chrome, Firefox, or Safari.');
+    return;
+  }
+
+  let DPR = Math.min(window.devicePixelRatio || 1, 2);
+  let W = 0, H = 0;
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // =============================================================
+  // 3) ATLAS TEXTURE (all N tokens at highest LOD, default 96×96)
+  // =============================================================
+  const TPR = ATLAS_TILES_ROW;
+  const atlasRows = Math.ceil(N / TPR);
+  const atlasW = TPR * tileSize;
+  const atlasH = atlasRows * tileSize;
+  // Atlas is fully overwritten by token tiles below, but the last partial row
+  // has unused tiles — zero-init (default) keeps those as pure black (matches dark theme).
+  const atlasData = new Uint8Array(atlasW * atlasH * 3);
+
+  const lodTiles = new Uint8Array(binBuf, 0, N * tileSize * tileSize * 3);
+  const stride = tileSize * 3;
+  for (let ti = 0; ti < N; ti++) {
+    const tileX = ti % TPR;
+    const tileY = (ti / TPR) | 0;
+    const srcStart = ti * tileSize * tileSize * 3;
+    for (let py = 0; py < tileSize; py++) {
+      const srcRow = srcStart + py * stride;
+      const dstRow = ((tileY * tileSize + py) * atlasW + tileX * tileSize) * 3;
+      atlasData.set(lodTiles.subarray(srcRow, srcRow + stride), dstRow);
+    }
+  }
+
+  const atlasTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, atlasTex);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, atlasW, atlasH, 0, gl.RGB, gl.UNSIGNED_BYTE, atlasData);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  // =============================================================
+  // 4) HISTORY TEXTURES (float32, width=N, height=HISTORY_LEN)
+  // Layout: pixel (tokenIdx, hIdx) = token's pos/fwd at history step hIdx.
+  // Ring buffer: newest row = ringHead.
+  // =============================================================
+  function mkFloatTex() {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, N, HISTORY_LEN, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return tex;
+  }
+  const posTex = mkFloatTex();
+  const fwdTex = mkFloatTex();
+
+  // =============================================================
+  // 5b) PERF: precomputed per-token phase + per-token windLo textures.
+  // Moves ~4 sin() calls out of the per-vertex shader path, saving
+  // ~140M trig ops/sec at 1024 tokens × 48² × 60fps.
+  // =============================================================
+  // tokPhase: deterministic hash of tokenIdx, written ONCE. Matches the old
+  // shader formula: fract(sin(tokenIdx * 12.9898) * 43758.5453) * 2π.
+  const tokPhaseArr = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const s = Math.sin(i * 12.9898) * 43758.5453;
+    tokPhaseArr[i] = (s - Math.floor(s)) * 6.2831853;
+  }
+  const tokPhaseTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tokPhaseTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, N, 1, 0, gl.RED, gl.FLOAT, tokPhaseArr);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  // windLoArr: the original "low-freq spatial wind" term. The shader comment
+  // said "image stays coherent" — i.e. the effect is deliberately constant
+  // within one token's image — so per-token is semantically correct. Recomputed
+  // per frame on CPU (1200 × 3 sin/frame = trivial CPU cost).
+  const windLoArr = new Float32Array(N * 3);
+  const windLoTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, windLoTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB32F, N, 1, 0, gl.RGB, gl.FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  // =============================================================
+  // 6) INIT TOKEN STATE (CPU) — cluster by collection + flocking setup
+  // =============================================================
+  const WALLET_ADDR = liveWalletAddr;
+  let rngSeed = seedFromString(WALLET_ADDR);
+  let rng = mulberry32(rngSeed);
+
+  // 6a. Group token indices by collection (order-stable from meta.tokens)
+  const collMap = new Map();
+  for (let i = 0; i < N; i++) {
+    const c = meta.tokens[i].collection || 'unknown';
+    if (!collMap.has(c)) collMap.set(c, []);
+    collMap.get(c).push(i);
+  }
+  // Sort: size desc, then name — stable ci assignment independent of Map order
+  const collections = Array.from(collMap.entries()).sort(
+    (a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
+  );
+
+  // Reverse index: tokenIdx → collection index (never changes for a given wallet)
+  const collectionIdx = new Int32Array(N);
+  collections.forEach(([, idxs], ci) => { idxs.forEach(i => { collectionIdx[i] = ci; }); });
+
+  const tokens = new Array(N);
+  for (let i = 0; i < N; i++) {
+    tokens[i] = {
+      pos: [1, 0, 0],
+      forward: [0, 1, 0],
+      phaseSeed: 0,
+      collection: meta.tokens[i].collection || 'unknown',
+      tokenId: meta.tokens[i].tokenId,
+      midColor: meta.tokens[i].midColor || [128,128,128]
+    };
+  }
+
+  const collectionData = collections.map(([name, idxs]) => ({
+    name,
+    indices: idxs,
+    seed: [1,0,0], seedFwd: [0,1,0],
+    centroid: [1,0,0],
+    avgFwd: [0,1,0],
+    activeCount: idxs.length,
+    bigPhase: 0,
+    bigAmp: idxs.length >= BIG_WAVE_MIN ? BIG_WAVE_AMP : 0,
+    radiusOffset: 1.0,            // current radius (animated each frame between LAYER_INNER_R and LAYER_OUTER_R)
+    radiusPhase:  0,              // unique phase offset for radius oscillation (set in seed)
+    radiusFreq:   0.05,           // unique angular frequency for radius oscillation (set in seed)
+    separation: [0,0,0],          // tangent-plane push from neighbouring centroids (computed each frame)
+  }));
+
+  // Pre-compute the discrete shell radii once.
+  const LAYER_RADII = [];
+  for (let li = 0; li < LAYER_COUNT; li++) {
+    const t = LAYER_COUNT === 1 ? 0.5 : li / (LAYER_COUNT - 1);
+    LAYER_RADII.push(LAYER_INNER_R + t * (LAYER_OUTER_R - LAYER_INNER_R));
+  }
+
+  function seedCollectionsAndTokens() {
+    // 6b. Each collection gets a deterministic seed point + shared "big wave" phase
+    for (const cd of collectionData) {
+      const theta = rng() * Math.PI * 2;
+      const phi   = Math.acos(2 * rng() - 1);
+      cd.seed[0] = Math.sin(phi) * Math.cos(theta);
+      cd.seed[1] = Math.sin(phi) * Math.sin(theta);
+      cd.seed[2] = Math.cos(phi);
+      // shared forward direction — random tangent to seed
+      const s = [rng()-.5, rng()-.5, rng()-.5];
+      const sd = s[0]*cd.seed[0] + s[1]*cd.seed[1] + s[2]*cd.seed[2];
+      let fx = s[0] - sd*cd.seed[0], fy = s[1] - sd*cd.seed[1], fz = s[2] - sd*cd.seed[2];
+      const fm = Math.sqrt(fx*fx + fy*fy + fz*fz) + 1e-9;
+      cd.seedFwd[0] = fx/fm; cd.seedFwd[1] = fy/fm; cd.seedFwd[2] = fz/fm;
+      cd.centroid[0] = cd.seed[0]; cd.centroid[1] = cd.seed[1]; cd.centroid[2] = cd.seed[2];
+      cd.avgFwd[0]   = cd.seedFwd[0]; cd.avgFwd[1] = cd.seedFwd[1]; cd.avgFwd[2] = cd.seedFwd[2];
+      cd.bigPhase = rng() * Math.PI * 2;
+      // Pick a depth shell. Deterministic via seeded rng → same wallet, same layout.
+      // Layer cycling: each collection oscillates its radius between INNER and OUTER
+      // shells with its own phase + frequency, so flocks slowly migrate between
+      // layers. Inner→outer→inner cycle takes ~30-90s per collection (varies).
+      cd.radiusPhase = rng() * Math.PI * 2;
+      cd.radiusFreq  = 0.06 + rng() * 0.10;   // 0.06–0.16 rad/s → 40–105s per cycle
+      cd.radiusOffset = (LAYER_INNER_R + LAYER_OUTER_R) / 2;  // start at mid-shell, animation takes over
+    }
+
+    // 6d. Spawn each token clustered near its collection seed
+    // Dynamic spread: low-N wallets get a wider initial cluster so the swarm
+    // actually covers a noticeable fraction of the sphere. High-N wallets keep
+    // tight 0.22-rad clusters so collections stay visually distinct.
+    //   N=1   → ~1.4 rad (~80° of sphere) — single token "fills" the orb
+    //   N=10  → ~0.55 rad — still generous
+    //   N=50+ → ~0.22 rad (asymptote, original tight cluster)
+    const SPAWN_SPREAD_TIGHT = 0.22;
+    const SPAWN_SPREAD_BASE  = 1.20;   // extra spread added at N=1, decays exponentially
+    const SPAWN_SPREAD = SPAWN_SPREAD_TIGHT + SPAWN_SPREAD_BASE * Math.exp(-N / 12);
+    for (let i = 0; i < N; i++) {
+      const cd = collectionData[collectionIdx[i]];
+      const a = rng() * Math.PI * 2;
+      const r = Math.sqrt(rng()) * SPAWN_SPREAD;
+      const sp = cd.seed;
+      // u = cross(seed, worldZ) — guaranteed perpendicular to seed (zero only when seed‖Z)
+      let ux = sp[1], uy = -sp[0], uz = 0;
+      if (Math.sqrt(ux*ux + uy*uy + uz*uz) < 1e-3) { ux = 1; uy = 0; uz = 0; }
+      const um = Math.sqrt(ux*ux + uy*uy + uz*uz) + 1e-9;
+      ux /= um; uy /= um; uz /= um;
+      // v = cross(seed, u) — perpendicular to both, also unit length (seed·u=0, |seed|=|u|=1)
+      const vx = sp[1]*uz - sp[2]*uy, vy = sp[2]*ux - sp[0]*uz, vz = sp[0]*uy - sp[1]*ux;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const ox = ux*ca + vx*sa, oy = uy*ca + vy*sa, oz = uz*ca + vz*sa;
+      // position on sphere at arc `r` from seed in direction (ox,oy,oz)
+      const c = Math.cos(r), sA = Math.sin(r);
+      let px = sp[0]*c + ox*sA, py = sp[1]*c + oy*sA, pz = sp[2]*c + oz*sA;
+      const pm = Math.sqrt(px*px + py*py + pz*pz) + 1e-9;
+      px /= pm; py /= pm; pz /= pm;
+      const jx = (rng() - .5) * 0.4, jy = (rng() - .5) * 0.4, jz = (rng() - .5) * 0.4;
+      let fwx = cd.seedFwd[0] + jx, fwy = cd.seedFwd[1] + jy, fwz = cd.seedFwd[2] + jz;
+      const fd = fwx*px + fwy*py + fwz*pz;
+      fwx -= fd*px; fwy -= fd*py; fwz -= fd*pz;
+      const fwm = Math.sqrt(fwx*fwx + fwy*fwy + fwz*fwz) + 1e-9;
+      tokens[i].pos[0] = px; tokens[i].pos[1] = py; tokens[i].pos[2] = pz;
+      tokens[i].forward[0] = fwx/fwm; tokens[i].forward[1] = fwy/fwm; tokens[i].forward[2] = fwz/fwm;
+      tokens[i].phaseSeed = rng() * 6.2831853;   // proper 2π range
+    }
+  }
+  seedCollectionsAndTokens();
+
+  // 6e. Big-wave data texture (RG32F, width=N, height=1): [bigPhase, bigAmp] per token
+  // bigWaveArr now packs THREE values per token: bigPhase, bigAmp, radiusOffset.
+  // Channel layout (RGB32F): R=phase, G=amplitude, B=collection's shell radius.
+  const bigWaveArr = new Float32Array(N * 3);
+  function fillBigWaveArr() {
+    for (let i = 0; i < N; i++) {
+      const cd = collectionData[collectionIdx[i]];
+      bigWaveArr[i*3]   = cd.bigPhase;
+      bigWaveArr[i*3+1] = cd.bigAmp;
+      bigWaveArr[i*3+2] = cd.radiusOffset;
+    }
+  }
+  fillBigWaveArr();
+  const bigWaveTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB32F, N, 1, 0, gl.RGB, gl.FLOAT, bigWaveArr);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  // Seed entire history with each token's initial pos/fwd — allocated once, refilled on reseed.
+  const initPos = new Float32Array(N * HISTORY_LEN * 4);
+  const initFwd = new Float32Array(N * HISTORY_LEN * 4);
+  function uploadInitialHistory() {
+    for (let h = 0; h < HISTORY_LEN; h++) {
+      for (let i = 0; i < N; i++) {
+        const off = (h * N + i) * 4;
+        initPos[off]     = tokens[i].pos[0];
+        initPos[off + 1] = tokens[i].pos[1];
+        initPos[off + 2] = tokens[i].pos[2];
+        initPos[off + 3] = 1;
+        initFwd[off]     = tokens[i].forward[0];
+        initFwd[off + 1] = tokens[i].forward[1];
+        initFwd[off + 2] = tokens[i].forward[2];
+        initFwd[off + 3] = 1;
+      }
+    }
+    gl.bindTexture(gl.TEXTURE_2D, posTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, N, HISTORY_LEN, 0, gl.RGBA, gl.FLOAT, initPos);
+    gl.bindTexture(gl.TEXTURE_2D, fwdTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, N, HISTORY_LEN, 0, gl.RGBA, gl.FLOAT, initFwd);
+  }
+  uploadInitialHistory();
+
+  let ringHead = HISTORY_LEN - 1;
+
+  // =============================================================
+  // 7) TANGENT FLOW (CPU)
+  // =============================================================
+  function tangentFlow(px, py, pz, t, out) {
+    // Global circulation — weakened to leave room for turbulence
+    const a1x = Math.sin(t*0.04),  a1y = 1.0,                    a1z = Math.cos(t*0.05);
+    const a2x = 1.0,               a2y = Math.sin(t*0.06)*0.6,   a2z = Math.cos(t*0.03);
+    const a3x = Math.cos(t*0.05),  a3y = Math.sin(t*0.04),       a3z = 0.8;
+
+    // Turbulence octave 1 — broad swoops (lower spatial freq)
+    const s1 = 0.95;
+    const tax = Math.sin(px*s1 + t*0.28) + Math.cos(pz*s1*1.1 - t*0.19);
+    const tay = Math.sin(py*s1*0.9 + t*0.24) + Math.cos(px*s1*0.8 - t*0.21);
+    const taz = Math.cos(px*s1*1.2 + t*0.17) + Math.sin(py*s1*1.1 - t*0.23);
+
+    // Turbulence octave 2 — finer wisps
+    const s2 = 2.7;
+    const tbx = Math.sin(py*s2 + t*0.55) - Math.cos(pz*s2*0.9 + t*0.48);
+    const tby = Math.cos(pz*s2*1.1 + t*0.61) + Math.sin(px*s2 - t*0.52);
+    const tbz = Math.sin(px*s2*0.9 + t*0.46) - Math.cos(py*s2 + t*0.58);
+
+    // Slow breathing wind — one big "gust" vector that drifts over time
+    const gx = Math.sin(t*0.11) * 0.9 + Math.cos(t*0.07) * 0.4;
+    const gy = Math.cos(t*0.09) * 0.8 + Math.sin(t*0.13) * 0.35;
+    const gz = Math.sin(t*0.10) * 1.0 - Math.cos(t*0.08) * 0.5;
+
+    // Weighted blend — global down, turbulence up
+    let vx =
+      (a1y*pz - a1z*py)*0.55 + (a2y*pz - a2z*py)*0.32 + (a3y*pz - a3z*py)*0.18
+      + (tay*pz - taz*py)*0.42 + (tby*pz - tbz*py)*0.26
+      + (gy*pz - gz*py)*0.22;
+    let vy =
+      (a1z*px - a1x*pz)*0.55 + (a2z*px - a2x*pz)*0.32 + (a3z*px - a3x*pz)*0.18
+      + (taz*px - tax*pz)*0.42 + (tbz*px - tbx*pz)*0.26
+      + (gz*px - gx*pz)*0.22;
+    let vz =
+      (a1x*py - a1y*px)*0.55 + (a2x*py - a2y*px)*0.32 + (a3x*py - a3y*px)*0.18
+      + (tax*py - tay*px)*0.42 + (tbx*py - tby*px)*0.26
+      + (gx*py - gy*px)*0.22;
+
+    const d = vx*px + vy*py + vz*pz;
+    out[0] = vx - d*px; out[1] = vy - d*py; out[2] = vz - d*pz;
+  }
+
+  // =============================================================
+  // 8) SHADERS
+  // =============================================================
+  const VS = `#version 300 es
+  precision highp float;
+  precision highp sampler2D;
+
+  uniform sampler2D u_posTex;
+  uniform sampler2D u_fwdTex;
+  uniform sampler2D u_atlas;
+  uniform sampler2D u_bigWaveTex;
+  uniform sampler2D u_tokPhaseTex;   // precomputed per-token phase (was fract(sin(...)) in shader)
+  uniform sampler2D u_windLoTex;     // precomputed per-token low-freq wind (was 3 sin() in shader)
+
+  uniform int   u_grid;
+  uniform int   u_histLen;
+  uniform int   u_ringHead;
+  uniform float u_laneWidth;
+  uniform float u_shearFactor;
+  uniform float u_waveAmp;
+  uniform float u_sphereR;
+  uniform float u_t;
+  uniform vec4  u_rotTrig;  // (cosYaw, sinYaw, cosPitch, sinPitch) — precomputed on CPU
+  uniform vec2  u_center;
+  uniform vec2  u_viewport;
+  uniform int   u_tilesPerRow;
+  uniform int   u_tileSize;
+  uniform float u_windHi;
+  uniform float u_bigWaveFreq;
+
+  out vec3  v_color;
+  out float v_depth;   // wz after rotation: +1 (front, near camera) → −1 (back, far)
+
+  void main() {
+    // ONE vertex per particle — drawn as POINTS instead of 4-vertex QUADS.
+    // 4× reduction in vertex shader invocations vs the previous instanced-quad path.
+    int instId   = gl_VertexID;
+    int cells    = u_grid * u_grid;
+    int tokenIdx = instId / cells;
+    int cellIdx  = instId - tokenIdx * cells;
+    int r        = cellIdx / u_grid;
+    int i2       = cellIdx - r * u_grid;
+
+    // sheared history index
+    float centered = float(i2) - float(u_grid - 1) * 0.5;
+    float hShear   = float(r) + centered * u_shearFactor;
+    float hClamp   = clamp(hShear, 0.0, float(u_histLen - 1));
+    int   hOff     = int(floor(hClamp));
+    int   hIdx     = ((u_ringHead - hOff) % u_histLen + u_histLen) % u_histLen;
+
+    vec3 p = texelFetch(u_posTex, ivec2(tokenIdx, hIdx), 0).xyz;
+    vec3 f = texelFetch(u_fwdTex, ivec2(tokenIdx, hIdx), 0).xyz;
+
+    vec3 rightV = normalize(cross(p, f));
+    float lane  = centered * u_laneWidth;
+    vec3 pos    = normalize(p + rightV * lane);
+
+    // Low-freq wind — "image-coherent" by design (comment in original code), so per-token
+    // is semantically correct. Precomputed on CPU each frame, uploaded to u_windLoTex.
+    // Eliminated: 3 sin() calls per vertex.
+    vec3 windLo = texelFetch(u_windLoTex, ivec2(tokenIdx, 0), 0).xyz;
+
+    float pxHash = fract(sin(
+      float(tokenIdx) * 12.9898 +
+      float(r)        * 78.233  +
+      float(i2)       * 45.164
+    ) * 43758.5453);
+    float phs = pxHash * 6.2831853;
+
+    vec3 windHi = vec3(
+      sin(pos.x * 5.3 + u_t * 1.10 + phs),
+      sin(pos.y * 5.9 + u_t * 1.30 + phs * 1.3),
+      sin(pos.z * 6.2 + u_t * 0.95 + phs * 0.7)
+    ) * u_windHi;
+
+    vec3 wind = windLo + windHi;
+    // project onto tangent plane so we stay on the sphere
+    wind -= dot(wind, pos) * pos;
+    pos = normalize(pos + wind);
+
+    // per-token phase — precomputed on CPU at init, stored in u_tokPhaseTex.
+    // Eliminated: 1 sin() call per vertex.
+    float tokPhase = texelFetch(u_tokPhaseTex, ivec2(tokenIdx, 0), 0).r;
+
+    float rowWave = sin(u_t * 1.4 + tokPhase + float(r) * 0.22);
+    float colWave = sin(u_t * 0.9 + tokPhase * 1.3 + float(r) * 0.15 + float(i2) * 0.18);
+    float wave    = (rowWave + colWave) * 0.5 * u_waveAmp;
+
+    // Per-collection data packed in a single texel:
+    //   bw.x = bigPhase    — collection-wide wave phase
+    //   bw.y = bigAmp      — collection-wide wave amplitude (0 if small collection)
+    //   bw.z = radiusOffset — which concentric shell this collection lives on
+    vec3  bw       = texelFetch(u_bigWaveTex, ivec2(tokenIdx, 0), 0).rgb;
+    float bigWave  = sin(u_t * u_bigWaveFreq + bw.x) * bw.y;
+
+    // Each collection sits at its own depth shell instead of all on r=1.
+    pos          *= (bw.z + wave + bigWave);
+
+    // world rotation — yaw (Y) then pitch (X); all trig precomputed on CPU
+    // and passed as u_rotTrig = (cos_yaw, sin_yaw, cos_pitch, sin_pitch).
+    // Eliminated: 4 transcendentals per vertex (cos/sin × 2).
+    float cr = u_rotTrig.x, sr  = u_rotTrig.y;
+    float wx1 = pos.x * cr + pos.z * sr;
+    float wz1 = -pos.x * sr + pos.z * cr;
+    float wy1 = pos.y;
+    float cp = u_rotTrig.z, sp2 = u_rotTrig.w;
+    float wx = wx1;
+    float wy = wy1 * cp - wz1 * sp2;
+    float wz = wy1 * sp2 + wz1 * cp;
+
+    // perspective — camera is at +z looking toward origin, so larger wz = closer.
+    // (Previously this was inverted: back-facing particles rendered ~2.6× larger than front,
+    //  which showed through the transparent sphere as "giant" images flying past.)
+    float zCam  = 1.9 - wz * 0.85;
+    float persp = 3.2 / zCam;
+    float sx    = u_center.x + wx * u_sphereR * persp;
+    float sy    = u_center.y + wy * u_sphereR * persp;
+    float size  = u_laneWidth * u_sphereR * persp * 1.55;  // denser packing — pixels overlap ~55%
+
+    // Point sprite centered at (sx, sy); rasterized as a gl_PointSize×gl_PointSize
+    // square — same visual as the previous 4-vertex quad, but 4× fewer VS calls.
+    vec2 clip = (vec2(sx, sy) / u_viewport) * 2.0 - 1.0;
+    clip.y    = -clip.y;
+
+    // Depth: we only need wz for back-to-front ordering; the absolute scale of
+    // gl_Position.z doesn't matter. Because pos is scaled by (1 + wave + bigWave)
+    // which peaks around 1.12, the raw -wz would reach ±1.12 and the GPU would
+    // cull anything past ±1 (near/far planes of clip space). Scale down so even
+    // the peak of the big wave stays safely inside [-1, 1].
+    gl_Position  = vec4(clip, -wz * 0.8, 1.0);
+    // gl_PointSize is framebuffer pixels; size is already in physical px.
+    // Clamp to ≥1 so sub-pixel sprites at the far back still render one pixel.
+    gl_PointSize = max(1.0, size);
+    v_depth      = wz;   // +1 front (near camera), −1 back (far) — used by FS for fog
+
+    // atlas fetch
+    int tileX = tokenIdx - (tokenIdx / u_tilesPerRow) * u_tilesPerRow;
+    int tileY = tokenIdx / u_tilesPerRow;
+    int px    = tileX * u_tileSize + i2;
+    int py    = tileY * u_tileSize + r;
+    v_color   = texelFetch(u_atlas, ivec2(px, py), 0).rgb;
+  }`;
+
+  const FS = `#version 300 es
+  precision highp float;
+  in vec3  v_color;
+  in float v_depth;     // +1 front, −1 back
+  uniform vec3  u_fogColor;
+  uniform float u_fogStrength;  // 0 = no fog, 1 = back fully washed out
+  out vec4 fragColor;
+  void main() {
+    // Smooth depth fog: front faces stay sharp + colorful, back faces fade
+    // toward the bg color, simulating atmospheric perspective.
+    float dn = clamp((1.0 - v_depth) * 0.5, 0.0, 1.0);   // 0 front → 1 back
+    float fog = smoothstep(0.0, 1.0, dn) * u_fogStrength;
+    vec3 col = mix(v_color, u_fogColor, fog);
+    fragColor = vec4(col, 1.0);
+  }`;
+
+  function compile(type, src, name) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error(name + ' log:\n' + gl.getShaderInfoLog(sh));
+      throw new Error(name + ' compile error');
+    }
+    return sh;
+  }
+  const vs = compile(gl.VERTEX_SHADER, VS, 'VS');
+  const fs = compile(gl.FRAGMENT_SHADER, FS, 'FS');
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+    showError('<b>Shader link failed.</b> See console.');
+    return;
+  }
+
+  // =============================================================
+  // 9) GEOMETRY — POINTS mode, no vertex attributes needed.
+  // Each particle = 1 vertex; gl_PointSize rasterizes it as a pixel square.
+  // This is a 4× reduction in vertex shader invocations vs the old
+  // 4-vertex-per-quad approach (which did the same math 4 times per particle).
+  // =============================================================
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  // no attribs — gl_VertexID drives everything
+  gl.bindVertexArray(null);
+
+  const U = {};
+  [
+    'posTex','fwdTex','atlas','bigWaveTex','tokPhaseTex','windLoTex',
+    'grid','histLen','ringHead',
+    'laneWidth','shearFactor','waveAmp','sphereR','t','rotTrig',
+    'center','viewport','tilesPerRow','tileSize',
+    'windHi','bigWaveFreq',
+    'fogColor','fogStrength'
+  ].forEach(k => U[k] = gl.getUniformLocation(prog, 'u_' + k));
+
+  // dark theme background (matches #07080c)
+  gl.clearColor(0.027, 0.031, 0.047, 1);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  gl.disable(gl.BLEND);
+
+  // =============================================================
+  // 10) THEME TOGGLE (single visible button in #loadPanel head)
+  // Source of truth = body.light class, set by the inline bootstrap script
+  // before main() runs (reads localStorage). main() syncs the GL clearColor
+  // to whatever theme is currently active and re-binds the toggle button.
+  // =============================================================
+  const themeBtn   = document.getElementById('themeBtn');
+  const DARK_CLEAR  = [0.027, 0.031, 0.047];
+  const LIGHT_CLEAR = [0.957, 0.957, 0.961];
+  let lightTheme = document.body.classList.contains('light');
+  function applyTheme() {
+    const c = lightTheme ? LIGHT_CLEAR : DARK_CLEAR;
+    gl.clearColor(c[0], c[1], c[2], 1);
+    document.body.classList.toggle('light', lightTheme);
+    if (themeBtn) themeBtn.textContent = lightTheme ? '\u263E Dark' : '\u263C Light';
+    localStorage.setItem('franken-theme', lightTheme ? 'light' : 'dark');
+  }
+  applyTheme();
+  function flipTheme() { lightTheme = !lightTheme; applyTheme(); }
+  if (themeBtn) themeBtn.onclick = (e) => { e.stopPropagation(); flipTheme(); themeBtn.blur(); };
+
+  // =============================================================
+  //  Mouse/touch orbit + zoom controls
+  // =============================================================
+  let userYaw = 0, userPitch = 0, userZoom = 1.0;
+  let dragging = false, lastX = 0, lastY = 0;
+  const minZoom = 0.35, maxZoom = 3.0;
+  canvas.addEventListener('pointerdown', e => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    userYaw   += (e.clientX - lastX) * 0.006;
+    userPitch += (e.clientY - lastY) * 0.006;
+    userPitch = Math.max(-1.2, Math.min(1.2, userPitch));
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  canvas.addEventListener('pointerup',     e => { dragging = false; });
+  canvas.addEventListener('pointercancel', e => { dragging = false; });
+  // macOS trackpad: pinch-zoom delivers wheel events with e.ctrlKey === true;
+  // two-finger swipe delivers plain wheel events (deltaX + deltaY). Mouse wheel
+  // is deltaY-only with no ctrlKey. Branch so swipe→orbit, pinch/wheel→zoom.
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    if (e.ctrlKey) {
+      // pinch-zoom: small deltas, needs higher sensitivity than deltaX swipe
+      const f = Math.exp(-e.deltaY * 0.012);
+      userZoom = Math.max(minZoom, Math.min(maxZoom, userZoom * f));
+    } else if (e.deltaX !== 0 || Math.abs(e.deltaY) < 4) {
+      // two-finger swipe — orbit in the direction of finger motion.
+      // Threshold keeps real mousewheel scrolls (integer steps ≥ 4 on most mice)
+      // routed to zoom, while high-frequency trackpad events go to orbit.
+      userYaw   += e.deltaX * 0.004;
+      userPitch += e.deltaY * 0.004;
+      userPitch = Math.max(-1.2, Math.min(1.2, userPitch));
+    } else {
+      // traditional mouse wheel — zoom
+      const f = Math.exp(-e.deltaY * 0.0012);
+      userZoom = Math.max(minZoom, Math.min(maxZoom, userZoom * f));
+    }
+  }, { passive: false });
+
+  // Touch pinch-to-zoom (mobile)
+  let pinchStart = null;
+  canvas.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchStart = { dist: Math.hypot(dx, dy), zoom: userZoom };
+      e.preventDefault();
+    }
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    if (e.touches.length === 2 && pinchStart) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      userZoom = Math.max(minZoom, Math.min(maxZoom, pinchStart.zoom * (dist / pinchStart.dist)));
+      e.preventDefault();
+    }
+  }, { passive: false });
+  canvas.addEventListener('touchend',    () => { pinchStart = null; });
+  canvas.addEventListener('touchcancel', () => { pinchStart = null; });
+
+  // hide loader
+  document.getElementById('loader').style.display = 'none';
+
+  // =============================================================
+  // 12) RENDER LOOP
+  // =============================================================
+  let simTime = 0;            // accumulated simulation time (seconds)
+  let lastNow = performance.now();
+  let fpsAcc  = 0, fpsCnt = 0, fpsLast = lastNow;
+  const rowPos = new Float32Array(N * 4);
+  const rowFwd = new Float32Array(N * 4);
+  const vbuf   = [0, 0, 0];
+
+  function frame(now) {
+    // dt clamped so that long tab-backgrounding doesn't produce a huge physics jump
+    let dtMs = now - lastNow;
+    lastNow = now;
+    if (dtMs > 100) dtMs = 16.7;          // cap physics step at ~6 fps equivalent
+    if (dtMs < 0)   dtMs = 0;
+    simTime += dtMs * 0.001;
+    const t = simTime;
+
+    // ----- layer cycling: animate each collection's radiusOffset between INNER and
+    // OUTER shells with its own phase. Then push fresh values into bigWaveArr.b
+    // and upload to bigWaveTex so the shader sees the new shell positions.
+    const layerSpan = LAYER_OUTER_R - LAYER_INNER_R;
+    const layerMid  = (LAYER_INNER_R + LAYER_OUTER_R) / 2;
+    for (let ci = 0; ci < collectionData.length; ci++) {
+      const cd = collectionData[ci];
+      const k = 0.5 + 0.5 * Math.sin(t * cd.radiusFreq + cd.radiusPhase);
+      cd.radiusOffset = LAYER_INNER_R + k * layerSpan;
+    }
+    for (let i = 0; i < N; i++) {
+      bigWaveArr[i*3 + 2] = collectionData[collectionIdx[i]].radiusOffset;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, 1, gl.RGB, gl.FLOAT, bigWaveArr);
+
+    // ----- flock pre-pass: compute per-collection centroid + average heading -----
+    // (Cheap: one loop over tokens grouped by collection, O(N).)
+    for (let ci = 0; ci < collectionData.length; ci++) {
+      const cd = collectionData[ci];
+      let cx = 0, cy = 0, cz = 0, ax = 0, ay = 0, az = 0;
+      const idxs = cd.indices;
+      for (let k = 0; k < idxs.length; k++) {
+        const tk = tokens[idxs[k]];
+        cx += tk.pos[0]; cy += tk.pos[1]; cz += tk.pos[2];
+        ax += tk.forward[0]; ay += tk.forward[1]; az += tk.forward[2];
+      }
+      cd.activeCount = idxs.length;
+      // Project centroid back onto the sphere
+      const cm = Math.sqrt(cx*cx + cy*cy + cz*cz) + 1e-9;
+      cd.centroid[0] = cx/cm; cd.centroid[1] = cy/cm; cd.centroid[2] = cz/cm;
+      const am = Math.sqrt(ax*ax + ay*ay + az*az) + 1e-9;
+      cd.avgFwd[0] = ax/am; cd.avgFwd[1] = ay/am; cd.avgFwd[2] = az/am;
+    }
+
+    // ----- inter-collection separation pre-pass (Reynolds #3) -----
+    // For each collection, sum repulsive vectors from every OTHER collection
+    // whose centroid is closer than SEPARATION_RADIUS arc-distance. Strength
+    // falls off with squared distance. Result is projected onto the tangent
+    // plane and applied to all tokens of the collection in the physics step.
+    // Cost: O(C²) where C = collection count. ~50² = 2500 ops/frame, trivial.
+    const C = collectionData.length;
+    for (let ci = 0; ci < C; ci++) {
+      const a = collectionData[ci];
+      let sx = 0, sy = 0, sz = 0;
+      for (let cj = 0; cj < C; cj++) {
+        if (cj === ci) continue;
+        const b = collectionData[cj];
+        // Same shell? small bonus weight (closer in 3D, same orbit conflict)
+        const dx = a.centroid[0] - b.centroid[0];
+        const dy = a.centroid[1] - b.centroid[1];
+        const dz = a.centroid[2] - b.centroid[2];
+        const d2 = dx*dx + dy*dy + dz*dz;
+        if (d2 > SEPARATION_RADIUS * SEPARATION_RADIUS) continue;
+        const d = Math.sqrt(d2) + 1e-6;
+        // Smooth quadratic falloff: 0 at edge of radius, 1 at center.
+        // Replaces the old inverse-square spike that caused "rocket-stripe"
+        // bursts when collections nearly touched.
+        const t = 1 - d / SEPARATION_RADIUS;
+        const w = t * t;
+        sx += (dx / d) * w;
+        sy += (dy / d) * w;
+        sz += (dz / d) * w;
+      }
+      // Project onto tangent plane at A's centroid
+      const ax2 = a.centroid[0], ay2 = a.centroid[1], az2 = a.centroid[2];
+      const sd = sx*ax2 + sy*ay2 + sz*az2;
+      sx -= sd*ax2; sy -= sd*ay2; sz -= sd*az2;
+      a.separation[0] = sx;
+      a.separation[1] = sy;
+      a.separation[2] = sz;
+    }
+
+    // ----- physics step -----
+    for (let i = 0; i < N; i++) {
+      const tok = tokens[i];
+      const off = i * 4;
+      tangentFlow(tok.pos[0], tok.pos[1], tok.pos[2], t + tok.phaseSeed, vbuf);
+
+      // ----- flocking: cohesion toward collection centroid + alignment to avgFwd -----
+      const cd = collectionData[collectionIdx[i]];
+      if (cd.activeCount > 1) {
+        const px = tok.pos[0], py = tok.pos[1], pz = tok.pos[2];
+        // cohesion: vector from pos toward centroid, tangent-projected
+        let chx = cd.centroid[0] - px;
+        let chy = cd.centroid[1] - py;
+        let chz = cd.centroid[2] - pz;
+        const chd = chx*px + chy*py + chz*pz;
+        chx -= chd*px; chy -= chd*py; chz -= chd*pz;
+        const chm = Math.sqrt(chx*chx + chy*chy + chz*chz);
+        if (chm > FLOCK_REST_ARC) {
+          // Only pull once we've drifted past the rest radius, and soften right at the edge.
+          const falloff = (chm - FLOCK_REST_ARC) / chm;
+          vbuf[0] += chx * falloff * FLOCK_COHESION;
+          vbuf[1] += chy * falloff * FLOCK_COHESION;
+          vbuf[2] += chz * falloff * FLOCK_COHESION;
+        }
+        // alignment: collection's average heading, tangent-projected
+        let alx = cd.avgFwd[0], aly = cd.avgFwd[1], alz = cd.avgFwd[2];
+        const ald = alx*px + aly*py + alz*pz;
+        alx -= ald*px; aly -= ald*py; alz -= ald*pz;
+        vbuf[0] += alx * FLOCK_ALIGN;
+        vbuf[1] += aly * FLOCK_ALIGN;
+        vbuf[2] += alz * FLOCK_ALIGN;
+      }
+
+      // Inter-collection separation: shared push from neighbouring centroids,
+      // applied uniformly to every token in the collection so the whole flock
+      // drifts away from crowded neighbours together.
+      vbuf[0] += cd.separation[0] * SEPARATION_STRENGTH;
+      vbuf[1] += cd.separation[1] * SEPARATION_STRENGTH;
+      vbuf[2] += cd.separation[2] * SEPARATION_STRENGTH;
+
+      // Pole avoidance: push toward equator when |y| > POLE_THRESHOLD.
+      // The slight non-tangent component is absorbed when pos is renormalized
+      // to the unit sphere a few lines below.
+      const ay = Math.abs(tok.pos[1]);
+      if (ay > POLE_THRESHOLD) {
+        const k = (ay - POLE_THRESHOLD) / (1 - POLE_THRESHOLD);  // 0 at threshold → 1 at pole
+        vbuf[1] -= Math.sign(tok.pos[1]) * k * POLE_PUSH_MAX;
+      }
+
+      const vm = Math.sqrt(vbuf[0]*vbuf[0] + vbuf[1]*vbuf[1] + vbuf[2]*vbuf[2]) + 1e-9;
+      let fx = vbuf[0]/vm, fy = vbuf[1]/vm, fz = vbuf[2]/vm;
+
+      let nx = tok.pos[0] + fx*ADVECT_SPEED;
+      let ny = tok.pos[1] + fy*ADVECT_SPEED;
+      let nz = tok.pos[2] + fz*ADVECT_SPEED;
+      const m = Math.sqrt(nx*nx + ny*ny + nz*nz);
+      nx/=m; ny/=m; nz/=m;
+      tok.pos[0]=nx; tok.pos[1]=ny; tok.pos[2]=nz;
+
+      // reproject forward onto new tangent
+      const d2 = fx*nx + fy*ny + fz*nz;
+      fx -= d2*nx; fy -= d2*ny; fz -= d2*nz;
+      let fm2 = Math.sqrt(fx*fx + fy*fy + fz*fz);
+      if (fm2 < 1e-6) {
+        fx = tok.forward[0]; fy = tok.forward[1]; fz = tok.forward[2];
+        const d3 = fx*nx + fy*ny + fz*nz;
+        fx -= d3*nx; fy -= d3*ny; fz -= d3*nz;
+        fm2 = Math.sqrt(fx*fx + fy*fy + fz*fz) + 1e-6;
+      }
+      fx/=fm2; fy/=fm2; fz/=fm2;
+
+      const blend = 0.22;
+      let sx = tok.forward[0]*(1-blend) + fx*blend;
+      let sy = tok.forward[1]*(1-blend) + fy*blend;
+      let sz = tok.forward[2]*(1-blend) + fz*blend;
+      const sd = sx*nx + sy*ny + sz*nz;
+      sx -= sd*nx; sy -= sd*ny; sz -= sd*nz;
+      const sm = Math.sqrt(sx*sx + sy*sy + sz*sz) + 1e-9;
+      tok.forward[0]=sx/sm; tok.forward[1]=sy/sm; tok.forward[2]=sz/sm;
+
+      rowPos[off]   = tok.pos[0];     rowPos[off+1] = tok.pos[1];     rowPos[off+2] = tok.pos[2];     rowPos[off+3] = 1;
+      rowFwd[off]   = tok.forward[0]; rowFwd[off+1] = tok.forward[1]; rowFwd[off+2] = tok.forward[2]; rowFwd[off+3] = 1;
+    }
+
+    // advance ring
+    ringHead = (ringHead + 1) % HISTORY_LEN;
+
+    gl.bindTexture(gl.TEXTURE_2D, posTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, ringHead, N, 1, gl.RGBA, gl.FLOAT, rowPos);
+    gl.bindTexture(gl.TEXTURE_2D, fwdTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, ringHead, N, 1, gl.RGBA, gl.FLOAT, rowFwd);
+
+    const activeN = N;
+
+    // Sphere size: grows with activeN and user zoom; clamped to a viewport-relative band.
+    const minDim  = Math.min(W, H);
+    const baseR   = minDim * SPHERE_FACTOR;
+    let   sphereR = baseR * (SPHERE_SCALE_A + Math.sqrt(Math.max(1, activeN)) * SPHERE_SCALE_B) * userZoom;
+    // Floor: even at N=1 the sphere fills a healthy fraction of the frame.
+    // Without this, halved SPHERE_FACTOR would make tiny wallets invisible.
+    const minSphereR = minDim * SPHERE_FRAC_MIN * userZoom;
+    if (sphereR < minSphereR) sphereR = minSphereR;
+    // Cap (silhouette safety margin) — see prior derivation, ≈ 0.265 max.
+    const maxSphereR = minDim * SPHERE_FRAC_MAX;
+    if (sphereR > maxSphereR) sphereR = maxSphereR;
+    const sphereR_physical = sphereR * DPR;
+    const cx_physical      = W * 0.5 * DPR;
+    const cy_physical      = H * 0.5 * DPR;
+
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    if (activeN > 0) {
+      // ----- per-frame CPU uploads for the perf textures -----
+      // windLo per token (was 3 sin()/vertex in shader; now 3 sin()/token on CPU).
+      for (let i = 0; i < N; i++) {
+        const p = tokens[i].pos;
+        windLoArr[i*3]   = Math.sin(p[0] * 2.2 + t * 0.45 + 1.23) * WIND_AMP_LOW;
+        windLoArr[i*3+1] = Math.sin(p[1] * 2.0 + t * 0.38 + 2.71) * WIND_AMP_LOW;
+        windLoArr[i*3+2] = Math.sin(p[2] * 2.5 + t * 0.55 + 4.12) * WIND_AMP_LOW;
+      }
+      gl.bindTexture(gl.TEXTURE_2D, windLoTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, 1, gl.RGB, gl.FLOAT, windLoArr);
+
+      // rotation trig — precomputed once per frame (was 4 trig/vertex in shader).
+      const yawAngle = t * 0.05 + userYaw;
+      const cr = Math.cos(yawAngle), sr = Math.sin(yawAngle);
+      const cp = Math.cos(userPitch), sp2 = Math.sin(userPitch);
+
+      gl.useProgram(prog);
+      gl.bindVertexArray(vao);
+
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, posTex);        gl.uniform1i(U.posTex, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, fwdTex);        gl.uniform1i(U.fwdTex, 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, atlasTex);      gl.uniform1i(U.atlas, 2);
+      gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);    gl.uniform1i(U.bigWaveTex, 4);
+      gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, tokPhaseTex);   gl.uniform1i(U.tokPhaseTex, 5);
+      gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, windLoTex);     gl.uniform1i(U.windLoTex, 6);
+
+      gl.uniform1i(U.grid, GRID);
+      gl.uniform1i(U.histLen, HISTORY_LEN);
+      gl.uniform1i(U.ringHead, ringHead);
+      gl.uniform1f(U.laneWidth, LANE_WIDTH);
+      gl.uniform1f(U.shearFactor, SHEAR_FACTOR);
+      gl.uniform1f(U.waveAmp, WAVE_AMPLITUDE);
+      gl.uniform1f(U.sphereR, sphereR_physical);
+      gl.uniform1f(U.t, t);
+      gl.uniform4f(U.rotTrig, cr, sr, cp, sp2);
+      gl.uniform2f(U.center, cx_physical, cy_physical);
+      gl.uniform2f(U.viewport, canvas.width, canvas.height);
+      gl.uniform1i(U.tilesPerRow, TPR);
+      gl.uniform1i(U.tileSize, tileSize);
+      gl.uniform1f(U.windHi, WIND_AMP_HIGH);
+      gl.uniform1f(U.bigWaveFreq, BIG_WAVE_FREQ);
+      // Atmospheric perspective: back of sphere fades toward bg color.
+      // Fog target = current clear color (theme-driven). Strength tuned for
+      // visible depth without making back layers disappear entirely.
+      const fogC = lightTheme ? LIGHT_CLEAR : DARK_CLEAR;
+      gl.uniform3f(U.fogColor, fogC[0], fogC[1], fogC[2]);
+      gl.uniform1f(U.fogStrength, 0.72);   // 0 = off, 1 = back fully washed out
+
+      // POINTS: one vertex per particle (vs 4 for the old quad path).
+      const totalParticles = N * GRID * GRID;
+      gl.drawArrays(gl.POINTS, 0, totalParticles);
+    }
+
+    // FPS counter (debug-only; the element is hidden unless ?debug=1)
+    const fpsDt = now - fpsLast; fpsLast = now;
+    if (fpsDt > 0 && fpsDt < 1000) { fpsAcc += 1000 / fpsDt; fpsCnt++; }
+    if (DEBUG && fpsCnt >= 30) {
+      document.getElementById('fps').textContent = (fpsAcc/fpsCnt).toFixed(0) + ' fps';
+      fpsAcc = 0; fpsCnt = 0;
+    } else if (fpsCnt >= 30) {
+      fpsAcc = 0; fpsCnt = 0;
+    }
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+// Top-level crash guard: surface errors instead of silently dying after first await.
+main().catch(err => {
+  console.error(err);
+  const e = document.getElementById('err');
+  if (e) {
+    e.style.display = 'block';
+    e.innerHTML = '<b>Fatal error.</b><br>' + (err && err.message ? err.message : err) +
+                  '<br><br>Check the browser console for the full stack.';
+  }
+  const l = document.getElementById('loader');
+  if (l) l.style.display = 'none';
+});
+</script>
+</body>
+</html>
