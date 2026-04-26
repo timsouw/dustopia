@@ -174,6 +174,13 @@
       // Replace state instead of pushing so the back button doesn't cycle.
       history.replaceState(null, '', '#' + m[1]);
     }
+    // The metadata animation_url for a minted NFT carries ?token=<id>; we
+    // stash it on window so buildLiveData can fetch the per-token config and
+    // filter the wallet down to the owner's chosen subset before rendering.
+    const tk = new URLSearchParams(location.search).get('token');
+    if (tk && /^\d+$/.test(tk) && tk.length <= 78) {
+      window.__dustopiaTokenId = tk;
+    }
   })();
 
   // Apply persisted theme BEFORE first paint to avoid a flash.
@@ -636,13 +643,60 @@ function setProgress(pct, active) {
 // holdings change (manual DELETE today, Alchemy webhook eventually).
 // =====================================================================
 
+// Per-token configuration: lets the holder pick a subset of their wallet
+// to render. Returns the parsed config or null on any failure (Worker
+// returns a default { mode:"all" } even when nothing's saved, so a real
+// null from this helper means the network call itself failed).
+async function tryFetchConfig(tokenId) {
+  if (!API_URL || !tokenId) return null;
+  try {
+    const r = await fetch(`${API_URL}/api/config/${tokenId}`);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+// Compact deterministic fingerprint of a selection blob. Two configs with
+// the same set of collections + tokens (regardless of order) produce the
+// same fp, which lets the R2 atlas cache amortize identical selections
+// across tokens. mode='all' always collapses to 'all'.
+async function selectionFingerprint(selection) {
+  if (!selection || selection.mode === 'all') return 'all';
+  const cols = (selection.collections || []).map(s => String(s).toLowerCase()).sort();
+  const tks  = (selection.tokens || []).map(t => `${String(t.contract).toLowerCase()}:${t.tokenId}`).sort();
+  const canon = cols.join(',') + '|' + tks.join(',');
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canon));
+  // First 8 bytes = 16 hex chars. Plenty unique for our use; collisions
+  // would only mean cache sharing across genuinely-different selections.
+  return Array.from(new Uint8Array(buf, 0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Filter a list of NFT objects by a selection. Returns the same shape;
+// preserves order. mode='all' is a no-op pass-through. mode='subset' keeps
+// only NFTs whose contract is in selection.collections OR whose
+// (contract, tokenId) pair is in selection.tokens.
+function filterNftsBySelection(nfts, selection) {
+  if (!selection || selection.mode === 'all') return nfts;
+  const cols = new Set((selection.collections || []).map(s => String(s).toLowerCase()));
+  const tks  = new Set((selection.tokens || []).map(t => `${String(t.contract).toLowerCase()}:${t.tokenId}`));
+  if (!cols.size && !tks.size) return [];
+  const out = [];
+  for (const n of nfts) {
+    const c  = (n.contract && n.contract.address) ? n.contract.address.toLowerCase() : '';
+    const id = n.tokenId != null ? String(n.tokenId) : '';
+    if (cols.has(c) || tks.has(`${c}:${id}`)) out.push(n);
+  }
+  return out;
+}
+
 // Returns { meta, binBuf } if cache hit, null on miss / any error.
 // "Any error" includes server 5xx, malformed payload, or a binary whose
 // length doesn't match meta.count · GRID² · 3 (stale cache after a GRID
 // constant change). On null we fall through to a fresh local build.
-async function tryFetchCachedAtlas(addr) {
+async function tryFetchCachedAtlas(addr, fp) {
   if (!API_URL) return null;
-  const base = `${API_URL}/api/atlas/${addr}?grid=${GRID}`;
+  const fpQ = (fp && fp !== 'all') ? `&fp=${fp}` : '';
+  const base = `${API_URL}/api/atlas/${addr}?grid=${GRID}${fpQ}`;
   let metaRes, binRes;
   try {
     metaRes = await fetch(base + '&meta=1');
@@ -728,9 +782,10 @@ async function tryCaptureAndUploadPreview(addr) {
 // reader checks first, so this ordering guarantees no half-cached state.
 // Errors are swallowed: a failed upload just means the next visitor pays
 // the build cost again, no user-visible damage.
-async function uploadAtlas(addr, meta, binBuf) {
+async function uploadAtlas(addr, meta, binBuf, fp) {
   if (!API_URL) return;
-  const base = `${API_URL}/api/atlas/${addr}?grid=${GRID}`;
+  const fpQ = (fp && fp !== 'all') ? `&fp=${fp}` : '';
+  const base = `${API_URL}/api/atlas/${addr}?grid=${GRID}${fpQ}`;
   try {
     // Gzip the binary client-side. NFT thumbnail RGB data is moderately
     // compressible (typically 35-55% reduction), and shipping fewer bytes
@@ -781,13 +836,24 @@ async function buildLiveData(input) {
   }
   const short = `${addr.slice(0,6)}…${addr.slice(-4)}`;
 
+  // ── Per-token config (only when an NFT id is in the URL) ────────
+  // Lets the holder pick a subset of their wallet to render. Atlas cache
+  // key is fingerprinted by selection so different selections for the
+  // same wallet don't collide in R2.
+  let selection = { mode: 'all', collections: [], tokens: [] };
+  if (window.__dustopiaTokenId) {
+    const cfg = await tryFetchConfig(window.__dustopiaTokenId);
+    if (cfg && cfg.selection) selection = cfg.selection;
+  }
+  const fp = await selectionFingerprint(selection);
+
   // ── Server cache check ──────────────────────────────────────────
   // Skip the image-fetch + canvas-build steps entirely if we have a
-  // pre-built atlas in R2 for this (addr, GRID). Repeat visits to a
-  // wallet's sphere — including every OpenSea iframe load — become
-  // a single binary download.
+  // pre-built atlas in R2 for this (addr, GRID, selection). Repeat
+  // visits to the same configured token (incl. every OpenSea iframe
+  // load) become a single binary download.
   setStatus(`<span>checking cache for ${short}…</span>`);
-  const cached = await tryFetchCachedAtlas(addr);
+  const cached = await tryFetchCachedAtlas(addr, fp);
   if (cached) {
     setStatus(`<span class="ok">✓ cached atlas (${cached.meta.count} tokens)</span>`);
     return {
@@ -799,19 +865,21 @@ async function buildLiveData(input) {
       failed:         0,
       totalRequested: cached.meta.count,
       fromCache:      true,
+      selection,
+      fp,
     };
   }
 
   setStatus(`<span>fetching NFTs for ${short}…</span>`);
-  const nfts = await fetchAllNFTsLive(addr, (cnt, total) => {
+  let nfts = await fetchAllNFTsLive(addr, (cnt, total) => {
     setStatus(`<span>fetching NFTs · ${cnt}${total ? ' / ~' + total : ''}</span>`);
-    // Within the [P_CACHE_CHECKED, P_NFTS_DONE] segment, fill proportional
-    // to cnt/total when total is known; otherwise rely on the segment
-    // floor (cache-checked) and let the next milestone push it forward.
-    if (total > 0) {
-      const f = P_CACHE_CHECKED + (P_NFTS_DONE - P_CACHE_CHECKED) * Math.min(1, cnt / total);
-    }
   });
+  // Apply the holder's selection (no-op when mode='all'). Done before the
+  // image fetch so we don't waste bandwidth pulling thumbnails for tokens
+  // the owner deliberately excluded.
+  nfts = filterNftsBySelection(nfts, selection);
+  if (!nfts.length) throw new Error('selection produced no NFTs to render');
+
   // Filter: not spam + has at least one image URL
   const candidates = [];
   for (const n of nfts) {
@@ -832,7 +900,6 @@ async function buildLiveData(input) {
     (d, t) => {
       setStatus(`<span>fetching images · ${d} / ${t}</span>`);
       setProgress(d / Math.max(1, t), true);
-      const f = P_NFTS_DONE + (P_IMGS_DONE - P_NFTS_DONE) * (d / Math.max(1, t));
     },
   );
   setProgress(0, false);
@@ -849,8 +916,8 @@ async function buildLiveData(input) {
   // OpenSea iframe load on this NFT) hits the cache path above. Awaited
   // upload would block first paint by ~5-30s for large wallets — not worth
   // it. Failures are logged and otherwise ignored.
-  uploadAtlas(addr, meta, binBuf);
-  return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false };
+  uploadAtlas(addr, meta, binBuf, fp);
+  return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false, selection, fp };
 }
 
 function waitForLoadAndBuild() {
