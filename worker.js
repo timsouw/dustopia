@@ -33,7 +33,8 @@ function corsHeaders(request) {
     'Access-Control-Allow-Origin':  allowed ? (origin || '*') : 'null',
     'Vary':                         'Origin',
     'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    // Content-Encoding is required for gzipped atlas uploads (PUT /api/atlas/...).
+    'Access-Control-Allow-Headers': 'Content-Type, Content-Encoding',
     'Access-Control-Max-Age':       '86400',
   };
 }
@@ -341,12 +342,45 @@ function atlasResponse(body, request, init = {}) {
   });
 }
 
-async function handleAtlasGet(addr, grid, wantMeta, request, env) {
+async function handleAtlasGet(addr, grid, wantMeta, request, env, ctx) {
+  // ── Edge cache layer ──────────────────────────────────────────────
+  // Cloudflare's free per-colocation cache. R2 is fast but every miss
+  // costs a Class B op + cross-region latency. Wrapping with caches.default
+  // means a second visitor in the same region pays nothing — the bytes
+  // come straight off the edge node. Cache-Control: immutable on the
+  // upstream response means the edge respects long TTLs.
+  const cache = caches.default;
+  const cacheKey = new Request(new URL(request.url).toString(), { method: 'GET' });
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const h = new Headers(hit.headers);
+    h.set('X-Edge-Cache', 'HIT');
+    return new Response(hit.body, { status: hit.status, headers: h });
+  }
+
   const key = atlasKey(addr, grid, wantMeta ? 'json' : 'bin');
   const obj = await env.ATLAS.get(key);
   if (!obj) return errorResponse(404, 'atlas not cached', request);
-  const ct = wantMeta ? 'application/json; charset=utf-8' : 'application/octet-stream';
-  return atlasResponse(obj.body, request, { headers: { 'Content-Type': ct } });
+
+  // Build response from R2 object; preserve stored metadata (in particular
+  // Content-Encoding: gzip when the client gzipped before upload — browsers
+  // decompress transparently on fetch).
+  const headers = new Headers({
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control':               ATLAS_CACHE_CONTROL,
+    'X-Edge-Cache':                'MISS',
+  });
+  obj.writeHttpMetadata(headers);
+  // Fallback content-type if R2 didn't have one stored.
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', wantMeta ? 'application/json; charset=utf-8' : 'application/octet-stream');
+  }
+
+  const resp = new Response(obj.body, { headers });
+  // Seed the edge cache for the next visitor. waitUntil so we don't block
+  // this response on the cache write.
+  if (ctx) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+  return resp;
 }
 
 async function handleAtlasPut(addr, grid, wantMeta, request, env) {
@@ -355,6 +389,12 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
   if (!ct.startsWith(expectedCt)) {
     return errorResponse(415, `expected ${expectedCt}`, request);
   }
+  // The frontend may gzip the binary before upload to cut R2 bandwidth in
+  // half; meta is too small to bother. Track the encoding so GET serves
+  // the same Content-Encoding header back and the browser auto-decompresses.
+  const ce = (request.headers.get('Content-Encoding') || '').toLowerCase();
+  const isGzipped = !wantMeta && (ce === 'gzip' || ce === 'deflate' || ce === 'br');
+
   const max = wantMeta ? ATLAS_META_MAX : ATLAS_BIN_MAX;
   const len = parseInt(request.headers.get('Content-Length') || '0', 10);
   if (len > max) return errorResponse(413, `body too large (${len} > ${max})`, request);
@@ -363,8 +403,11 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
   if (buf.byteLength > max) return errorResponse(413, 'body too large', request);
   if (!buf.byteLength) return errorResponse(400, 'empty body', request);
 
-  // Binary sanity check: must be exactly N · grid² · 3 bytes for some N ≤ 1024.
-  if (!wantMeta) {
+  // Binary sanity check: only meaningful for raw uploads. For compressed
+  // uploads we trust the client's framing — corruption would cause the
+  // meta count vs. binary length mismatch on read, which the frontend
+  // already handles by falling through to a fresh build.
+  if (!wantMeta && !isGzipped) {
     const tile = grid * grid * 3;
     if (buf.byteLength % tile !== 0) {
       return errorResponse(400, `binary not aligned to grid² · 3 (${tile} bytes)`, request);
@@ -373,7 +416,7 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
     if (n < 1 || n > ATLAS_TOKEN_LIMIT) {
       return errorResponse(400, `token count ${n} out of range [1, ${ATLAS_TOKEN_LIMIT}]`, request);
     }
-  } else {
+  } else if (wantMeta) {
     // Meta: must be valid JSON with the expected shape. Reject anything else
     // before it lands in the bucket.
     let meta;
@@ -387,30 +430,46 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
     }
   }
 
-  await env.ATLAS.put(atlasKey(addr, grid, wantMeta ? 'json' : 'bin'), buf, {
-    httpMetadata: { contentType: wantMeta ? 'application/json; charset=utf-8' : 'application/octet-stream' },
-  });
-  return jsonResponse({ ok: true, bytes: buf.byteLength }, request);
+  const httpMetadata = {
+    contentType: wantMeta ? 'application/json; charset=utf-8' : 'application/octet-stream',
+  };
+  if (isGzipped) httpMetadata.contentEncoding = ce;
+
+  await env.ATLAS.put(atlasKey(addr, grid, wantMeta ? 'json' : 'bin'), buf, { httpMetadata });
+  return jsonResponse({ ok: true, bytes: buf.byteLength, encoded: isGzipped ? ce : null }, request);
 }
 
-async function handleAtlasDelete(addr, request, env) {
+async function handleAtlasDelete(addr, request, env, ctx) {
   // Wipe both grids in both kinds. Cheap because R2 deletes are individual
   // ops; only 4 keys per address. Idempotent — missing keys are no-ops.
   const keys = [];
+  const cacheUrls = [];
+  const origin = new URL(request.url).origin;
   for (const grid of ATLAS_GRIDS_OK) {
     keys.push(atlasKey(addr, grid, 'bin'));
     keys.push(atlasKey(addr, grid, 'json'));
+    cacheUrls.push(`${origin}/api/atlas/${addr}?grid=${grid}`);
+    cacheUrls.push(`${origin}/api/atlas/${addr}?grid=${grid}&meta=1`);
   }
   await Promise.all(keys.map(k => env.ATLAS.delete(k).catch(() => {})));
+  // Edge cache purge — only clears this region's edge node. Other regions
+  // serve stale bytes until their Cache-Control TTL expires. Acceptable for
+  // a manual refresh button; if global propagation matters later we'll
+  // version the URL or use the Cache Purge API.
+  if (ctx) {
+    ctx.waitUntil(Promise.all(cacheUrls.map(u =>
+      caches.default.delete(new Request(u, { method: 'GET' })).catch(() => {})
+    )));
+  }
   return jsonResponse({ ok: true, deleted: keys.length }, request);
 }
 
-async function handleAtlas(addr, request, env) {
+async function handleAtlas(addr, request, env, ctx) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
     return errorResponse(400, 'invalid address', request);
   }
   if (request.method === 'DELETE') {
-    return handleAtlasDelete(addr, request, env);
+    return handleAtlasDelete(addr, request, env, ctx);
   }
   const url = new URL(request.url);
   const grid = parseInt(url.searchParams.get('grid') || '0', 10);
@@ -418,13 +477,13 @@ async function handleAtlas(addr, request, env) {
     return errorResponse(400, `grid must be one of ${[...ATLAS_GRIDS_OK].join(',')}`, request);
   }
   const wantMeta = url.searchParams.get('meta') === '1';
-  if (request.method === 'GET') return handleAtlasGet(addr, grid, wantMeta, request, env);
+  if (request.method === 'GET') return handleAtlasGet(addr, grid, wantMeta, request, env, ctx);
   if (request.method === 'PUT') return handleAtlasPut(addr, grid, wantMeta, request, env);
   return errorResponse(405, 'method not allowed', request);
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     // CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
@@ -441,7 +500,7 @@ export default {
       if (!(await rateLimitOk(request, env))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
-      return handleAtlas(atlasMatch[1], request, env);
+      return handleAtlas(atlasMatch[1], request, env, ctx);
     }
 
     if (request.method !== 'GET') {
