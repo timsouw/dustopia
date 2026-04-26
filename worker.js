@@ -253,14 +253,17 @@ async function handleMetadata(rawTokenId, request, env) {
   // Look up the current owner; fall back to the deploy wallet so transient
   // upstream failures don't blank the NFT in marketplaces.
   const owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
-  const liveUrl = `https://dustopia.xyz/#${owner}`;
+  // animation_url → chrome-free embed view (just the sphere). external_url →
+  // the landing page so the OpenSea "external link" still feels right.
+  const animUrl     = `https://dustopia.xyz/embed/${owner}`;
+  const externalUrl = `https://dustopia.xyz/#${owner}`;
 
   return metadataResponse({
     name:          `dustopia #${tokenId}`,
     description:   "Living wallet portrait -- every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder's collection.",
     image:         'https://dustopia.xyz/preview.png',
-    animation_url: liveUrl,
-    external_url:  liveUrl,
+    animation_url: animUrl,
+    external_url:  externalUrl,
     attributes:    [
       { trait_type: 'token_id', value: Number(tokenId) },
     ],
