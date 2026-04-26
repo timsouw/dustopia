@@ -334,8 +334,9 @@ async function handlePreview(rawTokenId, request, env, ctx) {
       'X-Edge-Cache':                'MISS',
     });
     obj.writeHttpMetadata(headers);
-    // httpMetadata remembers whether the stored asset is GIF or WebP.
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/gif');
+    // httpMetadata remembers the stored asset's actual type (PNG today,
+    // historical entries may still be GIF or WebP).
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/png');
     const resp = new Response(obj.body, { headers });
     if (ctx) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
     return resp;
@@ -371,16 +372,22 @@ async function handlePreview(rawTokenId, request, env, ctx) {
 //
 // V1 is unauthenticated like atlas. Size + MIME validated; SIWE-gated PUT
 // is the eventual hardening.
-const PREVIEW_MAX = 12 * 1024 * 1024;    // 12 MiB ceiling — real GIF captures are ~1-4 MiB
-const PREVIEW_MIN = 1024;                // weed out empty PUTs
-// Accept animated GIF or animated WebP. GIF is what the frontend actually
-// produces today (gif.js is the most reliable browser-side encoder); WebP
-// is allowed so we can swap encoders later without changing the Worker.
-const PREVIEW_OK_TYPES = ['image/gif', 'image/webp'];
+const PREVIEW_MAX = 4 * 1024 * 1024;     // 4 MiB ceiling — PNG snapshots run ~150-500 KiB
+const PREVIEW_MIN = 512;                 // weed out empty/garbage PUTs
+// Accept PNG (current frontend), JPEG, GIF, WebP. We sniff magic bytes on
+// PUT and reject anything that doesn't match its declared Content-Type, so
+// the Worker is encoder-agnostic and we can swap formats client-side later
+// without redeploying.
+const PREVIEW_OK_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
 function detectImageType(buf) {
   if (buf.byteLength < 12) return null;
   const sig = new Uint8Array(buf, 0, 12);
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (sig[0] === 0x89 && sig[1] === 0x50 && sig[2] === 0x4e && sig[3] === 0x47
+   && sig[4] === 0x0d && sig[5] === 0x0a && sig[6] === 0x1a && sig[7] === 0x0a) return 'image/png';
+  // JPEG: FF D8 FF
+  if (sig[0] === 0xff && sig[1] === 0xd8 && sig[2] === 0xff) return 'image/jpeg';
   // GIF89a / GIF87a
   if (sig[0] === 0x47 && sig[1] === 0x49 && sig[2] === 0x46 && sig[3] === 0x38) return 'image/gif';
   // RIFF .... WEBP
@@ -400,7 +407,7 @@ async function handlePreviewCap(addr, request, env, ctx) {
   if (request.method === 'HEAD') {
     const head = await env.ATLAS.head(key);
     if (!head) return errorResponse(404, 'no preview cached', request);
-    const ct = (head.httpMetadata && head.httpMetadata.contentType) || 'image/gif';
+    const ct = (head.httpMetadata && head.httpMetadata.contentType) || 'image/png';
     return new Response(null, {
       status: 200,
       headers: {
@@ -419,7 +426,7 @@ async function handlePreviewCap(addr, request, env, ctx) {
       'Cache-Control':               'public, max-age=3600',
     });
     obj.writeHttpMetadata(headers);
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/gif');
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/png');
     return new Response(obj.body, { headers });
   }
 

@@ -108,33 +108,34 @@
   body.embed #err { display: none !important; }
 
   /* Cold-start progress UI for embed mode. The full #loadPanel is hidden
-     in OpenSea iframes etc., but visitors still need feedback during the
-     ~30s atlas build on a fresh wallet. This is a tiny centered overlay
-     that mirrors setStatus/setProgress and disappears the moment the
-     sphere starts rendering. */
-  #embedStatus {
+     in OpenSea iframes, but visitors still need feedback during the ~30s
+     cold build. We render the word "loading" twice on top of itself: a
+     dim base layer and a bright "fill" layer clipped to the current
+     progress fraction, so the text appears to fill in from left to right
+     as the build advances. Hidden again the moment the sphere paints. */
+  #embedLoader {
     position:fixed; inset:0;
     display:none; align-items:center; justify-content:center;
-    flex-direction:column; gap:14px;
     pointer-events:none; user-select:none;
-    font-size:12px; color:#8a8a95; letter-spacing:.04em;
-    z-index: 60;
+    z-index:60;
   }
-  #embedStatus .text { min-height:16px; }
-  #embedStatus .bar {
-    width:200px; height:2px;
-    background:rgba(255,255,255,.08); border-radius:1px;
-    overflow:hidden; opacity:0; transition:opacity 200ms;
+  #embedLoader .wrap {
+    position:relative;
+    font-size:13px; letter-spacing:.22em; text-transform:lowercase;
+    font-family:inherit;
   }
-  #embedStatus .bar.active { opacity:1; }
-  #embedStatus .bar > div {
-    height:100%; background:rgba(231,231,234,.5);
-    width:0%; transition:width 100ms linear;
+  #embedLoader .base { color:#3a3a44; }
+  #embedLoader .fill {
+    position:absolute; left:0; top:0;
+    color:#e7e7ea;
+    overflow:hidden;
+    width:0%;
+    transition:width 220ms linear;
+    white-space:nowrap;
   }
-  body.light #embedStatus { color:#71717a; }
-  body.light #embedStatus .bar { background:rgba(0,0,0,.08); }
-  body.light #embedStatus .bar > div { background:rgba(24,24,27,.5); }
-  body.embed #embedStatus { display:flex; }
+  body.light #embedLoader .base { color:#c4c4c8; }
+  body.light #embedLoader .fill { color:#18181b; }
+  body.embed #embedLoader { display:flex; }
 </style>
 </head>
 <body class="light">
@@ -208,7 +209,7 @@
 </div>
 
 <div id="fps"></div>
-<div id="embedStatus"><div class="text"></div><div class="bar"><div></div></div></div>
+<div id="embedLoader"><div class="wrap"><span class="base">loading</span><span class="fill">loading</span></div></div>
 
 <script>
 // ====================================================================
@@ -323,11 +324,28 @@ const MAX_TOKENS   = 1024;           // safety ceiling for live render perf
 
 const statusEl = () => document.getElementById('status');
 function setStatus(html) {
+  // Only feeds the desktop #loadPanel #status. Embed mode shows the unified
+  // "loading" fill driven by setProgressFraction below — no per-step text.
   const el = statusEl(); if (el) el.innerHTML = html;
-  // Mirror into the embed-mode overlay so OpenSea / wallet-iframe visitors
-  // get build feedback even with the full #loadPanel hidden.
-  const e2 = document.querySelector('#embedStatus .text');
-  if (e2) e2.innerHTML = html;
+}
+
+// Monotonic 0..1 progress used by the embed-mode loader. Each pipeline
+// step bumps the fraction to a fixed milestone (or interpolates within a
+// segment for fetch loops). Going only forward avoids visual jitter when
+// status messages re-fire.
+let _progressFraction = 0;
+function setProgressFraction(f) {
+  if (typeof f !== 'number' || isNaN(f)) return;
+  const clamped = Math.max(0, Math.min(1, f));
+  if (clamped < _progressFraction) return;          // monotonic
+  _progressFraction = clamped;
+  const fill = document.querySelector('#embedLoader .fill');
+  if (fill) fill.style.width = (clamped * 100).toFixed(1) + '%';
+}
+function resetProgressFraction() {
+  _progressFraction = 0;
+  const fill = document.querySelector('#embedLoader .fill');
+  if (fill) fill.style.width = '0%';
 }
 // HTML-escape for any value derived from user input or external data that we
 // interpolate into setStatus / showError. Defense-in-depth: existing regex
@@ -584,13 +602,12 @@ async function buildAtlasAuto(pairs) {
 }
 
 function setProgress(pct, active) {
-  for (const sel of ['#progress', '#embedStatus .bar']) {
-    const wrap = document.querySelector(sel);
-    if (!wrap) continue;
-    const bar = wrap.firstElementChild;
-    if (active) wrap.classList.add('active'); else wrap.classList.remove('active');
-    if (bar) bar.style.width = (pct * 100).toFixed(1) + '%';
-  }
+  // Desktop #loadPanel only — the embed loader uses setProgressFraction.
+  const wrap = document.getElementById('progress');
+  if (!wrap) return;
+  const bar = wrap.firstElementChild;
+  if (active) wrap.classList.add('active'); else wrap.classList.remove('active');
+  if (bar) bar.style.width = (pct * 100).toFixed(1) + '%';
 }
 
 // =====================================================================
@@ -636,53 +653,18 @@ async function gzipBuffer(buf) {
 }
 
 // =====================================================================
-// PREVIEW CAPTURE — record ~5s of the live sphere as an animated GIF and
-// upload to R2. OpenSea grid tiles can't run our /embed iframe so they
-// fetch the metadata `image` URL; that URL transparently returns this
-// captured GIF once ANY visitor has seeded R2 for the wallet. First
-// visitor pays the capture+encode cost; everyone after them sees
-// instant grid animation. (gif.js does the encoding; we tried webpxmux
-// for smaller files but it's not reliably hosted on public CDNs.)
+// PREVIEW CAPTURE — single-frame PNG snapshot of the live sphere uploaded
+// to R2. Marketplace grids fetch metadata.image, the Worker resolves the
+// token's owner and serves this PNG. We tried animated GIF earlier and
+// the 12fps + dithered output looked rough; one well-timed still of the
+// rendered sphere reads better and weighs ~150-300 KB.
 // =====================================================================
 
-const PREVIEW_W       = 400;
-const PREVIEW_H       = 400;
-const PREVIEW_FRAMES  = 60;
-const PREVIEW_FPS     = 12;
-const PREVIEW_INTERVAL_MS = 1000 / PREVIEW_FPS;
-const GIFJS_BASE = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/';
+const PREVIEW_SIZE     = 800;             // PNG is square, matches metadata SVG viewBox
+const PREVIEW_DELAY_MS = 4500;            // wait for swarm to settle before snapping
 
-// Lazy-load gif.js + a same-origin blob URL for gif.worker.js. The encoder
-// spawns Web Workers via `new Worker(workerScript)`, which browsers block
-// when the URL is cross-origin (jsdelivr ≠ our origin) — the worker dies
-// silently, render() never fires 'finished', and the upload never happens.
-// Workaround: fetch the worker source as text, wrap in a Blob, hand a
-// blob: URL to gif.js. Same-origin from the browser's POV.
-let _gifJsPromise = null;
-function loadGifJs() {
-  if (_gifJsPromise) return _gifJsPromise;
-  _gifJsPromise = (async () => {
-    if (typeof GIF === 'undefined') {
-      await new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src   = GIFJS_BASE + 'gif.js';
-        script.onload  = resolve;
-        script.onerror = () => reject(new Error('gif.js script failed'));
-        document.head.appendChild(script);
-      });
-    }
-    if (typeof GIF === 'undefined') throw new Error('GIF global missing after script load');
-    const workerRes = await fetch(GIFJS_BASE + 'gif.worker.js');
-    if (!workerRes.ok) throw new Error('gif.worker.js fetch failed: ' + workerRes.status);
-    const workerSrc = await workerRes.text();
-    const workerUrl = URL.createObjectURL(new Blob([workerSrc], { type: 'application/javascript' }));
-    return workerUrl;
-  })().catch(e => { _gifJsPromise = null; throw e; });
-  return _gifJsPromise;
-}
-
-// Returns true if R2 already has a captured preview for this addr — in which
-// case we skip the (cheap but wasteful) re-capture cycle on this visit.
+// Returns true if R2 already has a captured preview for this addr — skips
+// the (cheap but wasteful) re-capture cycle when someone else seeded it.
 async function hasCachedPreview(addr) {
   if (!API_URL) return false;
   try {
@@ -693,64 +675,32 @@ async function hasCachedPreview(addr) {
 
 async function tryCaptureAndUploadPreview(addr) {
   if (!API_URL || !addr) return;
-  if (await hasCachedPreview(addr)) return;          // someone else already seeded it
-
-  let workerUrl;
-  try { workerUrl = await loadGifJs(); }
-  catch (e) { console.warn('gif.js load failed', e); return; }
+  if (await hasCachedPreview(addr)) return;
 
   const stage = document.getElementById('stage');
   if (!stage) return;
 
-  const gif = new GIF({
-    workers:      2,
-    quality:      10,                    // 1..30 (lower = better, slower)
-    width:        PREVIEW_W,
-    height:       PREVIEW_H,
-    workerScript: workerUrl,             // blob: URL — same-origin from browser POV
-    background:   '#14141a',
-    transparent:  null,
-  });
+  // Down-/up-sample the live canvas onto a fixed-size offscreen canvas so
+  // the uploaded asset is independent of the visitor's viewport size.
+  const off = document.createElement('canvas');
+  off.width = off.height = PREVIEW_SIZE;
+  const ctx = off.getContext('2d');
+  ctx.fillStyle = '#14141a';
+  ctx.fillRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
+  try { ctx.drawImage(stage, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE); }
+  catch (e) { console.warn('[preview] drawImage failed', e); return; }
 
-  // Capture frames at PREVIEW_FPS by drawImage()-ing the stage canvas onto
-  // a small offscreen canvas, then handing the canvas to gif.js (with copy:
-  // true so subsequent frames don't overwrite it).
-  const off    = document.createElement('canvas');
-  off.width    = PREVIEW_W;
-  off.height   = PREVIEW_H;
-  const offCtx = off.getContext('2d');
-
-  for (let i = 0; i < PREVIEW_FRAMES; i++) {
-    const t0 = performance.now();
-    offCtx.drawImage(stage, 0, 0, PREVIEW_W, PREVIEW_H);
-    gif.addFrame(off, { delay: PREVIEW_INTERVAL_MS, copy: true });
-    const wait = Math.max(0, PREVIEW_INTERVAL_MS - (performance.now() - t0));
-    await new Promise(r => setTimeout(r, wait));
-  }
-  console.log('[preview] captured', PREVIEW_FRAMES, 'frames; encoding…');
-
-  let blob;
-  try {
-    blob = await new Promise((resolve, reject) => {
-      // 60s timeout: 60 frames × 400² should encode in 5-30s on any modern
-      // CPU. If it's still hanging at 60s something's wrong (worker died,
-      // CDN blocked, etc.) — log and bail rather than sit forever.
-      const timer = setTimeout(() => reject(new Error('gif render timeout (60s)')), 60_000);
-      gif.on('finished', b => { clearTimeout(timer); resolve(b); });
-      gif.on('abort',   () => { clearTimeout(timer); reject(new Error('gif aborted')); });
-      try { gif.render(); } catch (e) { clearTimeout(timer); reject(e); }
-    });
-  } catch (e) { console.warn('[preview] gif encode failed', e); return; }
-  console.log('[preview] encoded', blob.size, 'bytes; uploading…');
+  const blob = await new Promise(res => off.toBlob(res, 'image/png'));
+  if (!blob) { console.warn('[preview] toBlob returned null'); return; }
 
   try {
     const r = await fetch(`${API_URL}/api/preview-cap/${addr}`, {
       method:  'PUT',
-      headers: { 'Content-Type': 'image/gif' },
+      headers: { 'Content-Type': 'image/png' },
       body:    blob,
     });
     if (!r.ok) console.warn('[preview] upload', r.status, await r.text().catch(() => ''));
-    else      console.log('[preview] uploaded ok');
+    else      console.log('[preview] uploaded ok', blob.size, 'bytes');
   } catch (e) { console.warn('[preview] upload err', e); }
 }
 
@@ -786,6 +736,17 @@ async function uploadAtlas(addr, meta, binBuf) {
 }
 
 async function buildLiveData(input) {
+  // Progress milestones used by the embed-mode loader. The fill of the
+  // "loading" word is bumped to each milestone as the build advances.
+  // Pick wide-enough segments so loops with unknown total length still
+  // make visible forward progress (e.g. NFT fetch may have 1 page or 10).
+  const P_RESOLVED      = 0.05;
+  const P_CACHE_CHECKED = 0.10;
+  const P_NFTS_DONE     = 0.20;
+  const P_IMGS_DONE     = 0.92;
+  const P_ATLAS_DONE    = 0.97;
+
+  resetProgressFraction();
   setStatus(`<span>resolving…</span>`);
   let addr = input.trim();
   if (!addr) throw new Error('empty input');
@@ -800,6 +761,7 @@ async function buildLiveData(input) {
   } else if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
     throw new Error('not a valid ENS (.eth) or 0x address');
   }
+  setProgressFraction(P_RESOLVED);
   const short = `${addr.slice(0,6)}…${addr.slice(-4)}`;
 
   // ── Server cache check ──────────────────────────────────────────
@@ -809,7 +771,9 @@ async function buildLiveData(input) {
   // a single binary download.
   setStatus(`<span>checking cache for ${short}…</span>`);
   const cached = await tryFetchCachedAtlas(addr);
+  setProgressFraction(P_CACHE_CHECKED);
   if (cached) {
+    setProgressFraction(1);
     setStatus(`<span class="ok">✓ cached atlas (${cached.meta.count} tokens)</span>`);
     return {
       meta:           cached.meta,
@@ -826,7 +790,15 @@ async function buildLiveData(input) {
   setStatus(`<span>fetching NFTs for ${short}…</span>`);
   const nfts = await fetchAllNFTsLive(addr, (cnt, total) => {
     setStatus(`<span>fetching NFTs · ${cnt}${total ? ' / ~' + total : ''}</span>`);
+    // Within the [P_CACHE_CHECKED, P_NFTS_DONE] segment, fill proportional
+    // to cnt/total when total is known; otherwise rely on the segment
+    // floor (cache-checked) and let the next milestone push it forward.
+    if (total > 0) {
+      const f = P_CACHE_CHECKED + (P_NFTS_DONE - P_CACHE_CHECKED) * Math.min(1, cnt / total);
+      setProgressFraction(f);
+    }
   });
+  setProgressFraction(P_NFTS_DONE);
   // Filter: not spam + has at least one image URL
   const candidates = [];
   for (const n of nfts) {
@@ -847,9 +819,12 @@ async function buildLiveData(input) {
     (d, t) => {
       setStatus(`<span>fetching images · ${d} / ${t}</span>`);
       setProgress(d / Math.max(1, t), true);
+      const f = P_NFTS_DONE + (P_IMGS_DONE - P_NFTS_DONE) * (d / Math.max(1, t));
+      setProgressFraction(f);
     },
   );
   setProgress(0, false);
+  setProgressFraction(P_IMGS_DONE);
   // Pair only tokens with successfully loaded images
   const pairs = [];
   for (let i = 0; i < used.length; i++) {
@@ -859,11 +834,13 @@ async function buildLiveData(input) {
   const failed = used.length - pairs.length;
   setStatus(`<span>building atlas (${pairs.length} tokens)…</span>`);
   const { meta, binBuf } = await buildAtlasAuto(pairs);
+  setProgressFraction(P_ATLAS_DONE);
   // Fire-and-forget: persist this atlas to R2 so the next visit (or every
   // OpenSea iframe load on this NFT) hits the cache path above. Awaited
   // upload would block first paint by ~5-30s for large wallets — not worth
   // it. Failures are logged and otherwise ignored.
   uploadAtlas(addr, meta, binBuf);
+  setProgressFraction(1);
   return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false };
 }
 
@@ -919,16 +896,15 @@ async function main() {
   document.title = `${displayName} · dustopia`;
   history.replaceState(null, '', '#' + (built.isEns ? built.originalInput : built.walletAddr));
 
-  // Hide the embed-mode build overlay now that the sphere is about to paint.
-  // (The full #loadPanel is already CSS-hidden in embed mode; this only
-  // affects the centered "fetching… / building…" status used in iframes.)
-  const eStat = document.getElementById('embedStatus');
-  if (eStat) eStat.style.display = 'none';
+  // Hide the embed-mode "loading" overlay now that the sphere is about to
+  // paint. The full #loadPanel is already CSS-hidden in embed mode; this
+  // is just the centered fill-text indicator.
+  const eLoader = document.getElementById('embedLoader');
+  if (eLoader) eLoader.style.display = 'none';
 
-  // Fire the preview-capture pipeline ~3s after first paint so particles
-  // have settled into their natural motion before we record. Skipped if R2
-  // already has a fresh capture for this wallet (HEAD check inside).
-  setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, 3000);
+  // Fire the preview-capture pipeline once the swarm has settled. Skipped
+  // if R2 already has a capture for this wallet (HEAD check inside).
+  setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, PREVIEW_DELAY_MS);
 
   // Collapse the load panel into a small pill that stays clickable.
   // The h1 inside displays the loaded wallet's ENS or short 0x address.
