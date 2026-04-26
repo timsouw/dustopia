@@ -1206,9 +1206,15 @@ async function main() {
     int r        = cellIdx / u_grid;
     int i2       = cellIdx - r * u_grid;
 
-    // sheared history index
+    // sheared history index. We add a constant offset of (GRID-1)/2 *
+    // shearFactor so the minimum value of hShear is exactly 0 — without it
+    // the leftmost columns of the first few rows all clamp to history step 0,
+    // producing a visible bunched/glued leading edge. With the offset every
+    // (r, col) maps to its own trail step in [0, HISTORY_LEN-1] (this still
+    // fits because HISTORY_LEN ≥ GRID + GRID·SHEAR_FACTOR by design).
     float centered = float(i2) - float(u_grid - 1) * 0.5;
-    float hShear   = float(r) + centered * u_shearFactor;
+    float hShearOffset = float(u_grid - 1) * 0.5 * u_shearFactor;
+    float hShear   = float(r) + centered * u_shearFactor + hShearOffset;
     float hClamp   = clamp(hShear, 0.0, float(u_histLen - 1));
     int   hOff     = int(floor(hClamp));
     int   hIdx     = ((u_ringHead - hOff) % u_histLen + u_histLen) % u_histLen;
@@ -1280,7 +1286,7 @@ async function main() {
     float persp = 3.2 / zCam;
     float sx    = u_center.x + wx * u_sphereR * persp;
     float sy    = u_center.y + wy * u_sphereR * persp;
-    float size  = u_laneWidth * u_sphereR * persp * 1.55;  // denser packing — pixels overlap ~55%
+    float size  = u_laneWidth * u_sphereR * persp * 1.86;  // denser packing — pixels overlap ~86%
 
     // Point sprite centered at (sx, sy); rasterized as a gl_PointSize×gl_PointSize
     // square — same visual as the previous 4-vertex quad, but 4× fewer VS calls.
