@@ -271,12 +271,29 @@ const LAYER_COUNT      = 4;
 const LAYER_INNER_R    = 0.78;   // inner-most shell
 const LAYER_OUTER_R    = 1.18;   // outer-most shell
 
-function showError(msg) {
+// CONTRACT: showError + setStatus interpolate via innerHTML. Callers MUST
+// either pass a static-string HTML literal or run user/external data through
+// esc() first. Search the file for "showError(" and "setStatus(" before
+// adding new sites — every audit so far has confirmed all dynamic values
+// are escaped, but this is defense-in-depth.
+function showError(html) {
   const e = document.getElementById('err');
   e.style.display = 'block';
-  e.innerHTML = msg;
+  e.innerHTML = html;
   document.getElementById('loader').style.display = 'none';
 }
+// Plain-text alternative when the message originates from user / network /
+// other untrusted source and you don't want to think about escaping.
+function showErrorText(text) { showError(esc(text)); }
+
+// Debug-only logging: noisy expected-fallback paths (older Safari without
+// OffscreenCanvas, slow image CDN, non-fatal upload retries) shouldn't
+// pollute production consoles. Errors that indicate real bugs still go
+// through console.error directly. Gate on the same ?debug=1 query as the
+// FPS overlay so dev sessions opt-in once.
+const _DEBUG_LOG = /[?&]debug=1/.test(location.search);
+function dbg(...args)  { if (_DEBUG_LOG) console.log(...args); }
+function dwarn(...args){ if (_DEBUG_LOG) console.warn(...args); }
 
 // Deterministic PRNG (mulberry32). Seeded from the wallet address so
 // every run of this wallet produces the identical animation — important
@@ -449,7 +466,15 @@ function loadImageWithTimeoutLive(url, ms) {
     img.crossOrigin = 'anonymous';
     let settled = false;
     const finish = v => { if (!settled) { settled = true; resolve(v); } };
-    const timer = setTimeout(() => finish(null), ms);
+    const timer = setTimeout(() => {
+      // On timeout, swap src to a tiny inline data: URL so the browser stops
+      // downloading the original. (You can't directly abort an HTMLImageElement
+      // request, but unsetting/replacing src interrupts the in-flight fetch
+      // in modern browsers.) Saves bandwidth on slow CDN URLs.
+      img.onload = img.onerror = null;
+      img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+      finish(null);
+    }, ms);
     img.onload  = () => { clearTimeout(timer); finish(img.naturalWidth > 0 ? img : null); };
     img.onerror = () => { clearTimeout(timer); finish(null); };
     img.src = url;
@@ -542,22 +567,32 @@ async function buildAtlasInWorker(pairs) {
     p.image ? createImageBitmap(p.image).catch(() => null) : null
   ));
   const blobUrl = URL.createObjectURL(new Blob([ATLAS_WORKER_SRC], { type: 'application/javascript' }));
-  const worker = new Worker(blobUrl);
-  return new Promise((resolve, reject) => {
-    worker.onmessage = (e) => {
-      worker.terminate();
-      URL.revokeObjectURL(blobUrl);
-      resolve({ meta: buildAtlasMeta(pairs), binBuf: e.data.binBuf });
-    };
-    worker.onerror = (e) => {
-      worker.terminate();
-      URL.revokeObjectURL(blobUrl);
-      reject(e);
-    };
-    // Transfer each bitmap (zero-copy). Filter nulls out of the transfer list.
-    const transferList = bitmaps.filter(b => b);
-    worker.postMessage({ bitmaps, tileSize }, transferList);
-  });
+  let worker = null;
+  // Centralised cleanup: kill the worker, revoke the blob URL, close any
+  // bitmaps we never managed to transfer. Idempotent — calling twice is fine.
+  // This guarantees no resource leaks even if postMessage throws synchronously
+  // (e.g. transferList contains a non-transferable) or the worker emits an
+  // error before transfer completes.
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return; cleaned = true;
+    try { worker && worker.terminate(); } catch {}
+    try { URL.revokeObjectURL(blobUrl); } catch {}
+    for (const b of bitmaps) { if (b && typeof b.close === 'function') { try { b.close(); } catch {} } }
+  };
+  try {
+    worker = new Worker(blobUrl);
+    return await new Promise((resolve, reject) => {
+      worker.onmessage = (e) => { cleanup(); resolve({ meta: buildAtlasMeta(pairs), binBuf: e.data.binBuf }); };
+      worker.onerror   = (e) => { cleanup(); reject(e); };
+      const transferList = bitmaps.filter(b => b);
+      try { worker.postMessage({ bitmaps, tileSize }, transferList); }
+      catch (e) { cleanup(); reject(e); }
+    });
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
 }
 
 // Synchronous fallback for environments without OffscreenCanvas/Worker
@@ -596,7 +631,7 @@ async function buildAtlasAuto(pairs) {
                    && typeof createImageBitmap !== 'undefined';
   if (offThreadOk) {
     try { return await buildAtlasInWorker(pairs); }
-    catch (e) { console.warn('atlas worker failed, falling back', e); }
+    catch (e) { dwarn('atlas worker failed, falling back', e); }
   }
   return buildAtlasBinary(pairs);
 }
@@ -688,10 +723,10 @@ async function tryCaptureAndUploadPreview(addr) {
   ctx.fillStyle = '#14141a';
   ctx.fillRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
   try { ctx.drawImage(stage, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE); }
-  catch (e) { console.warn('[preview] drawImage failed', e); return; }
+  catch (e) { dwarn('[preview] drawImage failed', e); return; }
 
   const blob = await new Promise(res => off.toBlob(res, 'image/png'));
-  if (!blob) { console.warn('[preview] toBlob returned null'); return; }
+  if (!blob) { dwarn('[preview] toBlob returned null'); return; }
 
   try {
     const r = await fetch(`${API_URL}/api/preview-cap/${addr}`, {
@@ -699,9 +734,9 @@ async function tryCaptureAndUploadPreview(addr) {
       headers: { 'Content-Type': 'image/png' },
       body:    blob,
     });
-    if (!r.ok) console.warn('[preview] upload', r.status, await r.text().catch(() => ''));
-    else      console.log('[preview] uploaded ok', blob.size, 'bytes');
-  } catch (e) { console.warn('[preview] upload err', e); }
+    if (!r.ok) dwarn('[preview] upload', r.status, await r.text().catch(() => ''));
+    else      dbg('[preview] uploaded ok', blob.size, 'bytes');
+  } catch (e) { dwarn('[preview] upload err', e); }
 }
 
 // Fire-and-forget upload of a freshly-built atlas. Binary first (the
@@ -725,14 +760,14 @@ async function uploadAtlas(addr, meta, binBuf) {
       headers['Content-Encoding'] = 'gzip';
     }
     const r1 = await fetch(base, { method: 'PUT', headers, body });
-    if (!r1.ok) { console.warn('atlas bin upload', r1.status); return; }
+    if (!r1.ok) { dwarn('atlas bin upload', r1.status); return; }
     const r2 = await fetch(base + '&meta=1', {
       method:  'PUT',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(meta),
     });
-    if (!r2.ok) console.warn('atlas meta upload', r2.status);
-  } catch (e) { console.warn('atlas upload err', e); }
+    if (!r2.ok) dwarn('atlas meta upload', r2.status);
+  } catch (e) { dwarn('atlas upload err', e); }
 }
 
 async function buildLiveData(input) {
@@ -865,6 +900,18 @@ function waitForLoadAndBuild() {
       } catch (e) {
         console.error(e);
         setStatus(`<span class="err">✗ ${esc(e.message)}</span>`);
+        // Embed mode hides #loadPanel entirely — surface the error in the
+        // centered loader text instead, and stop the fill at its current
+        // position so visitors see something happened rather than a stuck
+        // "loading" indicator forever. Auto-loaded /embed/<addr> URLs are
+        // the common failure path (typo in address, network blip).
+        if (document.body.classList.contains('embed')) {
+          const base = document.querySelector('#embedLoader .base');
+          const fill = document.querySelector('#embedLoader .fill');
+          const msg  = `error: ${e.message}`;
+          if (base) base.textContent = msg;
+          if (fill) fill.textContent = msg;
+        }
         btn.disabled = false;
         btn.textContent = LOAD_LABEL;
       }

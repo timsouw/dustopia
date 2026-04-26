@@ -16,9 +16,16 @@
 //   - Wallet pages: 30 minutes (NFT holdings change, but rarely on minute scale)
 //   - ENS resolves: 24 hours (names rarely change)
 
-// CORS: production sites only. Direct visits (no Origin header, e.g. curl or
-// the browser address bar) are also allowed so /api/health etc. stay testable.
-// All other origins get null ACAO and effectively cannot read responses from JS.
+// CORS: production sites only. Browser direct-navigation and server-to-server
+// callers (curl, marketplace bots) don't send Origin — for those we omit ACAO
+// entirely, which means a same-origin response with no cross-origin promise.
+// Browsers refuse to expose such responses to JS on other origins, so this is
+// safer than the old `*` fallback (which let arbitrary pages read sensitive
+// per-wallet data via fetch).
+//
+// Marketplace-serving endpoints (/api/metadata/, /api/preview/) explicitly
+// override to `*` via metadataResponse / their own headers — they're public
+// by contract and need to be reachable by anonymous bots.
 const ALLOWED_ORIGINS = new Set([
   'https://dustopia.xyz',
   'https://www.dustopia.xyz',
@@ -28,15 +35,24 @@ const PAGES_PREVIEW_RE = /^https:\/\/[a-z0-9-]+\.dustopia\.pages\.dev$/;
 
 function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '';
-  const allowed = !origin || ALLOWED_ORIGINS.has(origin) || PAGES_PREVIEW_RE.test(origin);
-  return {
-    'Access-Control-Allow-Origin':  allowed ? (origin || '*') : 'null',
+  const allowed = origin && (ALLOWED_ORIGINS.has(origin) || PAGES_PREVIEW_RE.test(origin));
+  const headers = {
     'Vary':                         'Origin',
     'Access-Control-Allow-Methods': 'GET, HEAD, PUT, DELETE, OPTIONS',
     // Content-Encoding is required for gzipped atlas uploads (PUT /api/atlas/...).
     'Access-Control-Allow-Headers': 'Content-Type, Content-Encoding',
     'Access-Control-Max-Age':       '86400',
   };
+  if (allowed) {
+    headers['Access-Control-Allow-Origin'] = origin;
+  } else if (origin) {
+    // Origin present but disallowed — explicit null blocks JS reads.
+    headers['Access-Control-Allow-Origin'] = 'null';
+  }
+  // No Origin header (direct nav, curl, server-to-server) → omit ACAO. The
+  // response still arrives, but a browser context with a different Origin
+  // can't expose it to JS without a permissive ACAO header.
+  return headers;
 }
 
 const WALLET_TTL = 30 * 60;          // 30 minutes
@@ -95,11 +111,20 @@ async function upstreamFetch(url, attempts = 3) {
   throw lastErr;
 }
 
+// Alchemy pageKey is an opaque base64ish token. We pass it back upstream
+// untouched, but cap the length and limit the charset so a malicious caller
+// can't smuggle path-traversal or huge values into our cache key.
+const PAGE_KEY_RE = /^[A-Za-z0-9_=:.\-]{1,512}$/;
+
 async function handleWallet(address, pageKey, request, env) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
     return errorResponse(400, 'invalid address', request);
   }
-  const cacheKey = `wallet:${address.toLowerCase()}:${pageKey || ''}`;
+  if (pageKey && !PAGE_KEY_RE.test(pageKey)) {
+    return errorResponse(400, 'invalid pageKey', request);
+  }
+  const addrLower = address.toLowerCase();
+  const cacheKey = `wallet:${addrLower}:${pageKey || ''}`;
 
   // Try KV cache first
   const cached = await env.WALLET_CACHE.get(cacheKey);
@@ -130,11 +155,18 @@ async function handleWallet(address, pageKey, request, env) {
   return jsonResponse(body, request, { headers: { 'X-Cache': 'MISS' } });
 }
 
-async function handleEns(name, request, env) {
-  if (!/^[a-z0-9.-]{3,253}\.eth$/i.test(name)) {
+// ENS labels: a-z 0-9 hyphen, 1-63 chars per label, no leading/trailing hyphen,
+// dot-separated, must end in .eth. Reject anything else before it hits the
+// upstream resolver or pollutes our KV cache (cache key uses the lowercased
+// name, so we normalize before doing anything with it).
+const ENS_LABEL_RE = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+eth$/;
+
+async function handleEns(rawName, request, env) {
+  const name = String(rawName || '').toLowerCase();
+  if (name.length < 5 || name.length > 253 || !ENS_LABEL_RE.test(name)) {
     return errorResponse(400, 'invalid ENS name', request);
   }
-  const cacheKey = `ens:${name.toLowerCase()}`;
+  const cacheKey = `ens:${name}`;
 
   const cached = await env.WALLET_CACHE.get(cacheKey);
   if (cached) {
@@ -309,7 +341,10 @@ async function handlePreview(rawTokenId, request, env, ctx) {
 
   // Resolve owner so we can look up their captured preview. Falls back to
   // the deploy wallet on transient lookup failure (matches metadata behaviour).
-  const owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  // Re-validate before constructing R2 keys so a malformed upstream value
+  // can't traverse outside the preview/ prefix.
+  let owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  if (!/^0x[0-9a-f]{40}$/.test(owner)) owner = OWNER_FALLBACK;
   const previewKey = `preview/${owner}.bin`;
 
   // Try R2 first. Wrap with edge cache so popular tokens skip the R2 op
@@ -435,16 +470,22 @@ async function handlePreviewCap(addr, request, env, ctx) {
     if (!PREVIEW_OK_TYPES.includes(ct)) {
       return errorResponse(415, `expected one of ${PREVIEW_OK_TYPES.join(', ')}`, request);
     }
-    const len = parseInt(request.headers.get('Content-Length') || '0', 10);
-    if (len > PREVIEW_MAX) {
-      return errorResponse(413, `body too large (${len} > ${PREVIEW_MAX})`, request);
-    }
+    // Require Content-Length so we reject oversize bodies BEFORE buffering
+    // any of them. Browser fetch() with Blob body always sets it; clients
+    // that send chunked-encoded uploads have to declare their size up-front.
+    const lenHdr = request.headers.get('Content-Length');
+    if (!lenHdr) return errorResponse(411, 'Content-Length required', request);
+    const len = parseInt(lenHdr, 10);
+    if (!Number.isFinite(len) || len < 0) return errorResponse(400, 'invalid Content-Length', request);
+    if (len > PREVIEW_MAX) return errorResponse(413, `body too large (${len} > ${PREVIEW_MAX})`, request);
+    if (len < PREVIEW_MIN) return errorResponse(400, 'body too small', request);
+
     const buf = await request.arrayBuffer();
-    if (buf.byteLength > PREVIEW_MAX) return errorResponse(413, 'body too large', request);
-    if (buf.byteLength < PREVIEW_MIN) return errorResponse(400, 'body too small', request);
+    // Defense in depth: actual body length must match the declared Content-Length.
+    if (buf.byteLength !== len)        return errorResponse(400, 'body length mismatch', request);
     const detected = detectImageType(buf);
-    if (!detected) return errorResponse(400, 'unrecognized image format', request);
-    if (detected !== ct) return errorResponse(400, `body is ${detected} but Content-Type is ${ct}`, request);
+    if (!detected)                     return errorResponse(400, 'unrecognized image format', request);
+    if (detected !== ct)               return errorResponse(400, `body is ${detected} but Content-Type is ${ct}`, request);
 
     await env.ATLAS.put(key, buf, {
       httpMetadata: { contentType: detected },
@@ -469,8 +510,11 @@ async function handleMetadata(rawTokenId, request, env) {
   }
 
   // Look up the current owner; fall back to the deploy wallet so transient
-  // upstream failures don't blank the NFT in marketplaces.
-  const owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  // upstream failures don't blank the NFT in marketplaces. Re-validate the
+  // address shape one more time before interpolating into URLs — defensive
+  // against any future code path that bypasses lookupOwner's own checks.
+  let owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  if (!/^0x[0-9a-f]{40}$/.test(owner)) owner = OWNER_FALLBACK;
   // animation_url → chrome-free embed view (just the sphere). external_url →
   // the landing page so the OpenSea "external link" still feels right.
   const animUrl     = `https://dustopia.xyz/embed/${owner}`;
@@ -588,12 +632,17 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
   const isGzipped = !wantMeta && (ce === 'gzip' || ce === 'deflate' || ce === 'br');
 
   const max = wantMeta ? ATLAS_META_MAX : ATLAS_BIN_MAX;
-  const len = parseInt(request.headers.get('Content-Length') || '0', 10);
-  if (len > max) return errorResponse(413, `body too large (${len} > ${max})`, request);
+  // Require Content-Length so we reject oversize bodies BEFORE buffering
+  // any of them. Browser fetch() with ArrayBuffer / Blob body always sets it.
+  const lenHdr = request.headers.get('Content-Length');
+  if (!lenHdr) return errorResponse(411, 'Content-Length required', request);
+  const len = parseInt(lenHdr, 10);
+  if (!Number.isFinite(len) || len < 0) return errorResponse(400, 'invalid Content-Length', request);
+  if (len > max)  return errorResponse(413, `body too large (${len} > ${max})`, request);
+  if (len === 0) return errorResponse(400, 'empty body', request);
 
   const buf = await request.arrayBuffer();
-  if (buf.byteLength > max) return errorResponse(413, 'body too large', request);
-  if (!buf.byteLength) return errorResponse(400, 'empty body', request);
+  if (buf.byteLength !== len) return errorResponse(400, 'body length mismatch', request);
 
   // Binary sanity check: only meaningful for raw uploads. For compressed
   // uploads we trust the client's framing — corruption would cause the
@@ -610,7 +659,10 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
     }
   } else if (wantMeta) {
     // Meta: must be valid JSON with the expected shape. Reject anything else
-    // before it lands in the bucket.
+    // before it lands in the bucket. We also cap the per-token string
+    // lengths so a malicious client can't shove a few MB of payload into
+    // each entry of a 1024-token array.
+    const TOKEN_FIELD_MAX = 256;
     let meta;
     try { meta = JSON.parse(new TextDecoder().decode(buf)); }
     catch { return errorResponse(400, 'meta is not valid JSON', request); }
@@ -619,6 +671,20 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
     }
     if (meta.count > ATLAS_TOKEN_LIMIT || meta.tokens.length !== meta.count) {
       return errorResponse(400, 'meta.count inconsistent', request);
+    }
+    if (meta.lods.length > 8) {
+      return errorResponse(400, 'meta.lods too large', request);
+    }
+    for (let i = 0; i < meta.tokens.length; i++) {
+      const t = meta.tokens[i];
+      if (!t || typeof t !== 'object') return errorResponse(400, `meta.tokens[${i}] must be object`, request);
+      const c = t.collection, id = t.tokenId;
+      if (c  !== undefined && (typeof c  !== 'string' || c.length  > TOKEN_FIELD_MAX)) {
+        return errorResponse(400, `meta.tokens[${i}].collection invalid`, request);
+      }
+      if (id !== undefined && (typeof id !== 'string' || id.length > TOKEN_FIELD_MAX)) {
+        return errorResponse(400, `meta.tokens[${i}].tokenId invalid`, request);
+      }
     }
   }
 
