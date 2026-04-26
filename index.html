@@ -98,16 +98,56 @@
   body.light #examples a:hover { text-decoration-color:#18181b; }
   body.light #progress { background:rgba(0,0,0,.08); }
   body.light #progress > div { background:#18181b; }
+
+  /* Embed mode = clean view for NFT animation_url. Strip every chrome
+     element so the sphere is the artwork, full-bleed. The sphere itself
+     is interactive (drag/pinch) — that's it. */
+  body.embed #loadPanel,
+  body.embed #fps,
+  body.embed #hint,
+  body.embed #err { display: none !important; }
 </style>
 </head>
 <body class="light">
 
 <canvas id="stage"></canvas>
 <script>
+  // Sandboxed iframes (e.g. OpenSea's NFT preview) don't grant localStorage,
+  // so direct access throws SecurityError before main() ever runs. Wrap reads
+  // and writes so the page degrades to in-memory state instead of crashing.
+  window.safeStorage = (function() {
+    let mem = null;
+    try {
+      const k = '__t';
+      localStorage.setItem(k, k);
+      localStorage.removeItem(k);
+      return {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return mem; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { mem = v; } },
+      };
+    } catch {
+      return { get: () => mem, set: (_k, v) => { mem = v; } };
+    }
+  })();
+
+  // Embed mode = clean view for NFT animation_url. Set the body class
+  // BEFORE first paint so CSS hides the UI without flicker.
+  (function() {
+    const isEmbed = /[?&]embed=1\b/.test(location.search) || /^\/embed(\/|$)/.test(location.pathname);
+    if (isEmbed) document.body.classList.add('embed');
+    // If we got the address via /embed/<addr> path, copy it into the hash so
+    // the existing hash-based auto-loader picks it up.
+    const m = location.pathname.match(/^\/embed\/(0x[0-9a-fA-F]{40}|[^/?#]+\.eth)\/?$/i);
+    if (m && !location.hash) {
+      // Replace state instead of pushing so the back button doesn't cycle.
+      history.replaceState(null, '', '#' + m[1]);
+    }
+  })();
+
   // Apply persisted theme BEFORE first paint to avoid a flash.
   // Default = light. The toggle button is wired up at script init below.
   (function() {
-    const saved = localStorage.getItem('franken-theme');
+    const saved = safeStorage.get('franken-theme');
     if (saved === 'dark') document.body.classList.remove('light');
     else                  document.body.classList.add('light');
   })();
@@ -1125,7 +1165,7 @@ async function main() {
     gl.clearColor(c[0], c[1], c[2], 1);
     document.body.classList.toggle('light', lightTheme);
     if (themeBtn) themeBtn.textContent = lightTheme ? '\u263E Dark' : '\u263C Light';
-    localStorage.setItem('franken-theme', lightTheme ? 'light' : 'dark');
+    safeStorage.set('franken-theme', lightTheme ? 'light' : 'dark');
   }
   applyTheme();
   function flipTheme() { lightTheme = !lightTheme; applyTheme(); }
