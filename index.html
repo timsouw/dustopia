@@ -177,9 +177,24 @@
     // The metadata animation_url for a minted NFT carries ?token=<id>; we
     // stash it on window so buildLiveData can fetch the per-token config and
     // filter the wallet down to the owner's chosen subset before rendering.
-    const tk = new URLSearchParams(location.search).get('token');
+    const params = new URLSearchParams(location.search);
+    const tk = params.get('token');
     if (tk && /^\d+$/.test(tk) && tk.length <= 78) {
       window.__dustopiaTokenId = tk;
+    }
+    // Live preview mode (used by /configure editor): the parent iframe
+    // injects ?preview=1&sel=<base64-json-selection> so we render with that
+    // override instead of fetching the saved config. Atlas upload is also
+    // skipped — we don't want preview drafts polluting R2 caches.
+    if (params.get('preview') === '1') window.__dustopiaPreview = true;
+    const selRaw = params.get('sel');
+    if (selRaw) {
+      try {
+        const dec = JSON.parse(atob(decodeURIComponent(selRaw)));
+        if (dec && (dec.mode === 'all' || dec.mode === 'subset')) {
+          window.__dustopiaLiveSelection = dec;
+        }
+      } catch { /* malformed → ignore, fall back to saved config */ }
     }
   })();
 
@@ -840,8 +855,14 @@ async function buildLiveData(input) {
   // Lets the holder pick a subset of their wallet to render. Atlas cache
   // key is fingerprinted by selection so different selections for the
   // same wallet don't collide in R2.
+  //
+  // Precedence: live preview (sel= URL param from /configure editor) wins
+  // over saved config so the editor's draft renders without round-tripping
+  // through R2. Falls through to the on-server config when no override.
   let selection = { mode: 'all', collections: [], tokens: [] };
-  if (window.__dustopiaTokenId) {
+  if (window.__dustopiaLiveSelection) {
+    selection = window.__dustopiaLiveSelection;
+  } else if (window.__dustopiaTokenId) {
     const cfg = await tryFetchConfig(window.__dustopiaTokenId);
     if (cfg && cfg.selection) selection = cfg.selection;
   }
@@ -915,8 +936,9 @@ async function buildLiveData(input) {
   // Fire-and-forget: persist this atlas to R2 so the next visit (or every
   // OpenSea iframe load on this NFT) hits the cache path above. Awaited
   // upload would block first paint by ~5-30s for large wallets — not worth
-  // it. Failures are logged and otherwise ignored.
-  uploadAtlas(addr, meta, binBuf, fp);
+  // it. Failures are logged and otherwise ignored. Skipped in preview mode
+  // so editor drafts don't pollute the public cache.
+  if (!window.__dustopiaPreview) uploadAtlas(addr, meta, binBuf, fp);
   return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false, selection, fp };
 }
 
@@ -988,8 +1010,12 @@ async function main() {
   if (eLoader) eLoader.style.display = 'none';
 
   // Fire the preview-capture pipeline once the swarm has settled. Skipped
-  // if R2 already has a capture for this wallet (HEAD check inside).
-  setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, PREVIEW_DELAY_MS);
+  // if R2 already has a capture for this wallet (HEAD check inside) and
+  // skipped entirely in editor preview mode so drafts don't overwrite
+  // the canonical OpenSea grid image.
+  if (!window.__dustopiaPreview) {
+    setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, PREVIEW_DELAY_MS);
+  }
 
   // Collapse the load panel into a small pill that stays clickable.
   // The h1 inside displays the loaded wallet's ENS or short 0x address.
