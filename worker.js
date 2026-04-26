@@ -310,7 +310,7 @@ async function handlePreview(rawTokenId, request, env, ctx) {
   // Resolve owner so we can look up their captured preview. Falls back to
   // the deploy wallet on transient lookup failure (matches metadata behaviour).
   const owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
-  const webpKey = `preview/${owner}.webp`;
+  const previewKey = `preview/${owner}.bin`;
 
   // Try R2 first. Wrap with edge cache so popular tokens skip the R2 op
   // entirely on the second hit per region.
@@ -323,7 +323,7 @@ async function handlePreview(rawTokenId, request, env, ctx) {
     return new Response(hit.body, { status: hit.status, headers: h });
   }
 
-  const obj = await env.ATLAS.get(webpKey);
+  const obj = await env.ATLAS.get(previewKey);
   if (obj) {
     const headers = new Headers({
       'Access-Control-Allow-Origin': '*',
@@ -334,7 +334,8 @@ async function handlePreview(rawTokenId, request, env, ctx) {
       'X-Edge-Cache':                'MISS',
     });
     obj.writeHttpMetadata(headers);
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/webp');
+    // httpMetadata remembers whether the stored asset is GIF or WebP.
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/gif');
     const resp = new Response(obj.body, { headers });
     if (ctx) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
     return resp;
@@ -370,25 +371,41 @@ async function handlePreview(rawTokenId, request, env, ctx) {
 //
 // V1 is unauthenticated like atlas. Size + MIME validated; SIWE-gated PUT
 // is the eventual hardening.
-const PREVIEW_WEBP_MAX = 8 * 1024 * 1024;     // 8 MiB ceiling — real captures are ~300 KiB-1.5 MiB
-const PREVIEW_WEBP_MIN = 1024;                // must be at least 1 KiB to weed out empty PUTs
+const PREVIEW_MAX = 12 * 1024 * 1024;    // 12 MiB ceiling — real GIF captures are ~1-4 MiB
+const PREVIEW_MIN = 1024;                // weed out empty PUTs
+// Accept animated GIF or animated WebP. GIF is what the frontend actually
+// produces today (gif.js is the most reliable browser-side encoder); WebP
+// is allowed so we can swap encoders later without changing the Worker.
+const PREVIEW_OK_TYPES = ['image/gif', 'image/webp'];
+
+function detectImageType(buf) {
+  if (buf.byteLength < 12) return null;
+  const sig = new Uint8Array(buf, 0, 12);
+  // GIF89a / GIF87a
+  if (sig[0] === 0x47 && sig[1] === 0x49 && sig[2] === 0x46 && sig[3] === 0x38) return 'image/gif';
+  // RIFF .... WEBP
+  if (sig[0] === 0x52 && sig[1] === 0x49 && sig[2] === 0x46 && sig[3] === 0x46
+   && sig[8] === 0x57 && sig[9] === 0x45 && sig[10] === 0x42 && sig[11] === 0x50) return 'image/webp';
+  return null;
+}
 
 async function handlePreviewCap(addr, request, env, ctx) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
     return errorResponse(400, 'invalid address', request);
   }
-  const key = `preview/${addr.toLowerCase()}.webp`;
+  // Single key per address. The httpMetadata contentType remembers whether
+  // it's GIF or WebP so GET serves the right MIME without sniffing.
+  const key = `preview/${addr.toLowerCase()}.bin`;
 
   if (request.method === 'HEAD') {
-    // Lightweight existence check. Frontend uses this to skip re-captures
-    // when a fresh-enough WebP is already in R2.
     const head = await env.ATLAS.head(key);
     if (!head) return errorResponse(404, 'no preview cached', request);
+    const ct = (head.httpMetadata && head.httpMetadata.contentType) || 'image/gif';
     return new Response(null, {
       status: 200,
       headers: {
         ...corsHeaders(request),
-        'Content-Type':   'image/webp',
+        'Content-Type':   ct,
         'Content-Length': String(head.size),
       },
     });
@@ -402,36 +419,30 @@ async function handlePreviewCap(addr, request, env, ctx) {
       'Cache-Control':               'public, max-age=3600',
     });
     obj.writeHttpMetadata(headers);
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/webp');
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/gif');
     return new Response(obj.body, { headers });
   }
 
   if (request.method === 'PUT') {
-    const ct = (request.headers.get('Content-Type') || '').toLowerCase();
-    if (!ct.startsWith('image/webp')) {
-      return errorResponse(415, 'expected image/webp', request);
+    const ct = (request.headers.get('Content-Type') || '').toLowerCase().split(';')[0].trim();
+    if (!PREVIEW_OK_TYPES.includes(ct)) {
+      return errorResponse(415, `expected one of ${PREVIEW_OK_TYPES.join(', ')}`, request);
     }
     const len = parseInt(request.headers.get('Content-Length') || '0', 10);
-    if (len > PREVIEW_WEBP_MAX) {
-      return errorResponse(413, `body too large (${len} > ${PREVIEW_WEBP_MAX})`, request);
+    if (len > PREVIEW_MAX) {
+      return errorResponse(413, `body too large (${len} > ${PREVIEW_MAX})`, request);
     }
     const buf = await request.arrayBuffer();
-    if (buf.byteLength > PREVIEW_WEBP_MAX) return errorResponse(413, 'body too large', request);
-    if (buf.byteLength < PREVIEW_WEBP_MIN) return errorResponse(400, 'body too small', request);
-    // RIFF magic bytes for WebP: "RIFF" .... "WEBP"
-    const sig = new Uint8Array(buf, 0, 12);
-    const isWebP = sig[0] === 0x52 && sig[1] === 0x49 && sig[2] === 0x46 && sig[3] === 0x46  // RIFF
-                && sig[8] === 0x57 && sig[9] === 0x45 && sig[10] === 0x42 && sig[11] === 0x50; // WEBP
-    if (!isWebP) return errorResponse(400, 'not a WebP file', request);
+    if (buf.byteLength > PREVIEW_MAX) return errorResponse(413, 'body too large', request);
+    if (buf.byteLength < PREVIEW_MIN) return errorResponse(400, 'body too small', request);
+    const detected = detectImageType(buf);
+    if (!detected) return errorResponse(400, 'unrecognized image format', request);
+    if (detected !== ct) return errorResponse(400, `body is ${detected} but Content-Type is ${ct}`, request);
 
     await env.ATLAS.put(key, buf, {
-      httpMetadata: { contentType: 'image/webp' },
+      httpMetadata: { contentType: detected },
     });
-    // We don't surgically purge edge cache for /api/preview/<tokenId>
-    // entries (no reverse owner→tokens index). The SVG fallback's
-    // max-age=300 keeps the staleness window under 5 minutes for fresh
-    // captures, which is plenty for marketplace UX.
-    return jsonResponse({ ok: true, bytes: buf.byteLength }, request);
+    return jsonResponse({ ok: true, bytes: buf.byteLength, type: detected }, request);
   }
 
   if (request.method === 'DELETE') {
@@ -461,10 +472,10 @@ async function handleMetadata(rawTokenId, request, env) {
   return metadataResponse({
     name:          `dustopia #${tokenId}`,
     description:   "Living wallet portrait -- every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder's collection.",
-    // Preview URL is extension-hinted to .webp so marketplaces prefer the
-    // animated WebP path; Worker still serves animated SVG transparently
-    // from the same URL when no capture is in R2 yet.
-    image:         `https://api.dustopia.xyz/api/preview/${tokenId}.webp`,
+    // Worker decides the actual MIME (GIF / WebP / SVG fallback) per request
+    // based on what's in R2 for the token's owner; the URL is extension-less
+    // so marketplaces don't lock onto a specific format.
+    image:         `https://api.dustopia.xyz/api/preview/${tokenId}`,
     animation_url: animUrl,
     external_url:  externalUrl,
     attributes:    [
@@ -677,6 +688,18 @@ export default {
       return handleAtlas(atlasMatch[1], request, env, ctx);
     }
 
+    // Preview capture upload/serve. PUT from /embed/<addr> after the sphere
+    // is captured; HEAD from /embed/<addr> to skip re-captures; GET for
+    // direct testing. Routed before the global method check below because
+    // it accepts non-GET methods.
+    const previewCapMatch = path.match(/^\/api\/preview-cap\/([^/]+)\/?$/);
+    if (previewCapMatch) {
+      if (!(await rateLimitOk(request, env))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      return handlePreviewCap(previewCapMatch[1], request, env, ctx);
+    }
+
     if (request.method !== 'GET') {
       return errorResponse(405, 'method not allowed', request);
     }
@@ -703,17 +726,6 @@ export default {
     if (previewMatch) {
       if (request.method !== 'GET') return errorResponse(405, 'method not allowed', request);
       return handlePreview(previewMatch[1], request, env, ctx);
-    }
-
-    // Preview capture upload/serve. PUT from /embed/<addr> after the sphere
-    // is captured; HEAD from /embed/<addr> to skip re-captures; GET for
-    // direct testing. Rate-limited because this is an upload path.
-    const previewCapMatch = path.match(/^\/api\/preview-cap\/([^/]+)\/?$/);
-    if (previewCapMatch) {
-      if (!(await rateLimitOk(request, env))) {
-        return errorResponse(429, 'rate limit exceeded', request);
-      }
-      return handlePreviewCap(previewCapMatch[1], request, env, ctx);
     }
 
     if (!(await rateLimitOk(request, env))) {
