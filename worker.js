@@ -206,31 +206,40 @@ async function handleOwned(addr, request, env) {
     return jsonResponse(cached, request, { headers: { 'X-Cache': 'HIT' } });
   }
 
-  const u = new URL(`https://eth-mainnet.g.alchemy.com/nft/v3/${env.ALCHEMY_KEY}/getNFTsForOwner`);
-  u.searchParams.set('owner', addr);
-  u.searchParams.append('contractAddresses[]', NFT_CONTRACT);
-  u.searchParams.set('pageSize', '100');
-  u.searchParams.set('withMetadata', 'false');
-
-  let r;
-  try { r = await upstreamFetch(u.toString()); }
-  catch (e) { return errorResponse(502, `alchemy unreachable: ${e.message}`, request); }
-  if (!r.ok) return errorResponse(502, `alchemy HTTP ${r.status}`, request);
-
-  let data;
-  try { data = await r.json(); }
-  catch { return errorResponse(502, 'alchemy returned invalid JSON', request); }
-
+  // Alchemy paginates getNFTsForOwner at 100 per page; whales with hundreds
+  // of dustopia tokens are unlikely but this loop costs nothing in the
+  // common (≤1 page) case and avoids silently truncating the list.
   const tokenIds = [];
-  for (const n of (data.ownedNfts || [])) {
-    const id = n && (n.tokenId || (n.id && n.id.tokenId));
-    if (typeof id !== 'string') continue;
-    // Alchemy may return either decimal ("1") or hex ("0x01"). Normalize.
-    let dec;
-    try { dec = id.startsWith('0x') ? BigInt(id).toString(10) : BigInt(id).toString(10); }
-    catch { continue; }
-    if (!/^\d+$/.test(dec) || dec.length > 78) continue;
-    tokenIds.push(dec);
+  let pageKey = null;
+  for (let p = 0; p < 50; p++) {
+    const u = new URL(`https://eth-mainnet.g.alchemy.com/nft/v3/${env.ALCHEMY_KEY}/getNFTsForOwner`);
+    u.searchParams.set('owner', addr);
+    u.searchParams.append('contractAddresses[]', NFT_CONTRACT);
+    u.searchParams.set('pageSize', '100');
+    u.searchParams.set('withMetadata', 'false');
+    if (pageKey) u.searchParams.set('pageKey', pageKey);
+
+    let r;
+    try { r = await upstreamFetch(u.toString()); }
+    catch (e) { return errorResponse(502, `alchemy unreachable: ${e.message}`, request); }
+    if (!r.ok) return errorResponse(502, `alchemy HTTP ${r.status}`, request);
+
+    let data;
+    try { data = await r.json(); }
+    catch { return errorResponse(502, 'alchemy returned invalid JSON', request); }
+
+    for (const n of (data.ownedNfts || [])) {
+      const id = n && (n.tokenId || (n.id && n.id.tokenId));
+      if (typeof id !== 'string') continue;
+      // Alchemy may return either decimal ("1") or hex ("0x01"). Normalize.
+      let dec;
+      try { dec = BigInt(id).toString(10); }
+      catch { continue; }
+      if (!/^\d+$/.test(dec) || dec.length > 78) continue;
+      tokenIds.push(dec);
+    }
+    if (!data.pageKey) break;
+    pageKey = data.pageKey;
   }
 
   const body = JSON.stringify({ contract: NFT_CONTRACT, owner: addrLower, tokenIds });
@@ -311,7 +320,10 @@ async function lookupOwner(tokenId, env) {
 
   // Contract revert (token doesn't exist) shows up as { error: {...} }.
   if (json.error || !json.result || json.result === '0x') return null;
-  // ownerOf returns address left-padded to 32 bytes. Last 20 bytes are it.
+  // ownerOf returns 32-byte word: '0x' + 64 hex chars, address in last 40.
+  // Anything shorter is a malformed RPC response — refuse rather than
+  // truncate our way into a fake-looking address.
+  if (typeof json.result !== 'string' || json.result.length < 66) return null;
   const owner = ('0x' + json.result.slice(-40)).toLowerCase();
   // Sanity check: should be a valid hex address, not the zero address.
   if (!/^0x[0-9a-f]{40}$/.test(owner) || owner === '0x' + '00'.repeat(20)) {
@@ -1062,6 +1074,7 @@ async function fetchOwnerFresh(tokenId, env) {
     json = await r.json();
   } catch { return null; }
   if (json.error || !json.result || json.result === '0x') return null;
+  if (typeof json.result !== 'string' || json.result.length < 66) return null;
   const owner = ('0x' + json.result.slice(-40)).toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(owner) || owner === '0x' + '00'.repeat(20)) return null;
   return owner;

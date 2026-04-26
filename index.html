@@ -1702,6 +1702,12 @@ async function main() {
   const rowFwd = new Float32Array(N * 4);
   const vbuf   = [0, 0, 0];
 
+  // One-shot signal to a parent frame (the /configure editor) that the
+  // sphere has rendered for the first time. Toggled true at the end of
+  // the first frame() call so the "updating preview…" badge clears at
+  // the right moment instead of when the iframe DOM finishes loading.
+  let firstPaintSent = false;
+
   function frame(now) {
     // dt clamped so that long tab-backgrounding doesn't produce a huge physics jump
     let dtMs = now - lastNow;
@@ -1958,6 +1964,19 @@ async function main() {
       fpsAcc = 0; fpsCnt = 0;
     } else if (fpsCnt >= 30) {
       fpsAcc = 0; fpsCnt = 0;
+    }
+
+    // First-paint signal for the editor preview iframe. /configure
+    // listens for this and clears its "updating preview…" badge once the
+    // sphere has actually rendered (the iframe `load` event fires too
+    // early — atlas build adds another 5-10s before the first frame).
+    if (!firstPaintSent) {
+      firstPaintSent = true;
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'dustopia:built' }, location.origin);
+        }
+      } catch { /* cross-origin parent or sandbox — silently ignore */ }
     }
 
     requestAnimationFrame(frame);

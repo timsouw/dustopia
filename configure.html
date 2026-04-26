@@ -373,6 +373,15 @@ function render() {
   state.tokenId = route.kind === 'editor' ? route.tokenId : null;
   setText('#crumb', route.kind === 'editor' ? `configure / #${route.tokenId}` : 'configure');
 
+  // Leaving the editor view? Cancel any pending preview-push debounce so
+  // it doesn't fire after the iframe is gone (would no-op on null #ifr,
+  // but the timer would still hold a callback in memory).
+  const isEditorRoute = route.kind === 'editor';
+  if (!isEditorRoute && editor.pushTimer) {
+    clearTimeout(editor.pushTimer);
+    editor.pushTimer = null;
+  }
+
   if (!state.address) {
     state.view = 'disconnected';
     renderDisconnected();
@@ -384,7 +393,7 @@ function render() {
     return;
   }
   state.view = 'editor';
-  startEditorIfNeeded();   // kicks off async load + initial renderEditor
+  startEditorIfNeeded();   // kicks off async load + initial mountEditor
 }
 
 // ── Render: disconnected ─────────────────────────────────────
@@ -527,6 +536,12 @@ function groupByCollection(nfts) {
 // Pre-fill `selected` from the saved-config selection blob. Collections in
 // `selection.collections` get every token of that contract pre-checked
 // (so the UI stays consistent with how the renderer will treat the cfg).
+//
+// Defensively filters out entries whose contract isn't in the wallet
+// today: a config saved when the holder owned a token they later sold
+// would otherwise show a phantom checked checkbox in the tree, only for
+// serializeSelection to silently drop it at save time. Better to make
+// the UI honest about what's actually selectable.
 function hydrateSelected(byCollection, selection) {
   const sel = new Set();
   if (!selection || selection.mode !== 'subset') return sel;
@@ -536,8 +551,12 @@ function hydrateSelected(byCollection, selection) {
     if (cols.has(contract)) {
       for (const t of info.tokens) sel.add(`${contract}:${t.tokenId}`);
     }
+    // Per-token entries: only add if the token is still in the wallet.
+    for (const t of info.tokens) {
+      const k = `${contract}:${t.tokenId}`;
+      if (tks.has(k)) sel.add(k);
+    }
   }
-  for (const k of tks) sel.add(k);
   return sel;
 }
 
@@ -567,9 +586,13 @@ async function loadEditorData() {
   editor.collectionsList = [];
   editor.selected = new Set();
   editor.expanded = new Set();
-  renderEditor();
+  editor.loadError = null;
+  // Mount the editor shell with a placeholder iframe (no selection yet, so
+  // the iframe boots against the saved config). We swap the iframe src once
+  // we know the canonical hydrated selection — that's at most one extra
+  // load total, and it only happens if the saved cfg differs from default.
+  mountEditor();
   try {
-    // Saved config + wallet NFTs in parallel.
     const [cfgRes, walletNfts] = await Promise.all([
       fetch(`${API_URL}/api/config/${editor.tokenId}`).then(r => r.ok ? r.json() : null),
       fetchEntireWallet(state.address),
@@ -584,20 +607,48 @@ async function loadEditorData() {
     editor.loadError = e.message || 'load failed';
   } finally {
     editor.loading = false;
-    renderEditor();
-    // Once data's in, push the initial selection to the iframe so it
-    // matches what's drawn server-side.
-    schedulePushSelection(0);
+    refreshSidebar();
+    // Boot the iframe against the hydrated selection. If the saved cfg is
+    // the default mode='all', this does nothing visible — buildInitialPreviewSrc
+    // returned the same selection on mount. For non-default cfgs this swaps
+    // the src to the real subset, replacing the loading-state iframe.
+    const fr = $('#previewFrame');
+    if (fr) {
+      const newSrc = buildInitialPreviewSrc();
+      if (fr.src !== new URL(newSrc, location.href).toString()) {
+        editor.iframeStale = true;
+        $('#previewStale')?.classList.add('show');
+        fr.src = newSrc;
+      }
+    }
   }
 }
 
 // ── Editor view rendering ────────────────────────────────────
-function renderEditor() {
+// Two-phase render to avoid trashing the live preview iframe on every
+// state change:
+//   mountEditor()    — runs once per (token, address) entry. Builds the
+//                       full DOM, including a fresh iframe wired to the
+//                       initial selection. Wires permanent listeners.
+//   refreshSidebar() — runs on every selection change. Only rewrites the
+//                       sidebar's innerHTML, leaves the iframe element
+//                       intact so its sphere-render state survives.
+//
+// Without this split, every checkbox click was destroying the iframe and
+// reloading from a no-?sel= URL, losing both the live-preview frame and
+// each renderEditor() reattaching a new `load` listener (slow leak).
+function buildInitialPreviewSrc() {
+  // Always boot the iframe with the currently-active selection so we get
+  // a single initial load instead of "load default, then reload with sel".
+  const selection = editor.byCollection.size
+    ? serializeSelection(editor.byCollection, editor.selected, editor.mode)
+    : null;
+  const sel = selection ? `&sel=${encodeURIComponent(btoa(JSON.stringify(selection)))}` : '';
+  return `/embed/${state.address}?token=${editor.tokenId}&preview=1${sel}&t=${Date.now()}`;
+}
+
+function mountEditor() {
   const main = $('#app');
-  // Soft warning if the token isn't in this wallet's owned list. Save will
-  // server-side reject anyway, but it's friendlier to flag it up front.
-  // We tolerate empty ownedTokenIds (still loading) — the warning only
-  // shows once we KNOW the list and the current token isn't in it.
   const ownsThis = !state.ownedTokenIds.length || state.ownedTokenIds.includes(editor.tokenId);
   const warnBanner = ownsThis ? '' : `
     <div class="status-line err" style="margin-bottom:14px;">
@@ -609,27 +660,30 @@ function renderEditor() {
     ${warnBanner}
     <div class="editor-grid">
       <div class="preview-frame">
-        <iframe id="previewFrame" src="${esc(`/embed/${state.address}?token=${editor.tokenId}&preview=1`)}"></iframe>
+        <iframe id="previewFrame" src="${esc(buildInitialPreviewSrc())}"></iframe>
         <div class="preview-stale" id="previewStale">updating preview…</div>
       </div>
-      <aside class="editor-side">
+      <aside class="editor-side" id="editorSide">
         ${editor.loading ? '<div class="status-line">loading wallet…</div>' : renderSidebar()}
       </aside>
     </div>`;
   $('#backBtn').addEventListener('click', () => go('/configure'));
-  if (editor.loading) return;
-  wireSidebar();
-  // The preview iframe reloads each time we push a new selection (we set
-  // its src). Every load → clear the stale badge so the user knows the
-  // visible sphere now matches their checkboxes.
+  // Iframe `load` is a fallback signal; the real "rebuild done" comes from
+  // index.html via postMessage 'dustopia:built' once the sphere has
+  // actually painted. We still update iframeReady on load for sanity.
   const fr = $('#previewFrame');
   if (fr) {
-    fr.addEventListener('load', () => {
-      editor.iframeReady = true;
-      editor.iframeStale = false;
-      $('#previewStale')?.classList.remove('show');
-    });
+    fr.addEventListener('load', () => { editor.iframeReady = true; });
   }
+  if (!editor.loading) wireSidebar();
+}
+
+// Re-render only the sidebar. Does not touch the iframe.
+function refreshSidebar() {
+  const aside = $('#editorSide');
+  if (!aside) return;
+  aside.innerHTML = renderSidebar();
+  wireSidebar();
 }
 
 function renderSidebar() {
@@ -728,12 +782,6 @@ function wireSidebar() {
   $('#saveBtn')?.addEventListener('click', onSaveClick);
 }
 
-function refreshSidebar() {
-  const aside = document.querySelector('.editor-side');
-  if (!aside) return;
-  aside.innerHTML = renderSidebar();
-  wireSidebar();
-}
 function refreshTreeOnly() {
   const tree = $('#tree');
   if (tree) tree.innerHTML = renderTree();
@@ -796,9 +844,21 @@ function pushSelectionToIframe() {
   const selection = serializeSelection(editor.byCollection, editor.selected, editor.mode);
   const sel = btoa(JSON.stringify(selection));
   fr.src = `/embed/${state.address}?token=${editor.tokenId}&preview=1&sel=${encodeURIComponent(sel)}&t=${Date.now()}`;
-  // iframe `load` listener (wired in renderEditor) clears the stale
-  // indicator once the new atlas paints.
+  // The iframe will postMessage 'dustopia:built' when its sphere first
+  // paints; the listener below clears the stale badge at that point.
+  // iframe `load` is too early — atlas build adds another 5-10s.
 }
+
+// Listener for the iframe's first-paint signal. Same-origin only — we
+// receive only from our own /embed/ child, never from third-party frames.
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin) return;
+  if (!e.data || typeof e.data !== 'object') return;
+  if (e.data.type === 'dustopia:built') {
+    editor.iframeStale = false;
+    $('#previewStale')?.classList.remove('show');
+  }
+});
 
 // ── Save flow ───────────────────────────────────────────────
 function randomNonce() {
@@ -853,15 +913,17 @@ async function onSaveClick() {
 // ── Render: editor entry point ───────────────────────────────
 function startEditorIfNeeded() {
   if (state.view !== 'editor') return;
-  // Same token, already loaded → just re-render in case wallet/theme
-  // changed or we're returning from the list view.
+  // Same token, already loaded → re-mount the shell (the user came back
+  // from the list view, the DOM was wiped). The selection state in
+  // `editor.selected` survives across navigations so the iframe boots
+  // with the live draft, not the saved config.
   if (editor.tokenId === state.tokenId && !editor.loading) {
-    renderEditor();
+    mountEditor();
     return;
   }
   editor.tokenId = state.tokenId;
-  loadEditorData();   // sets loading=true + calls renderEditor twice
-                      // (once with loading, again when data resolves)
+  loadEditorData();   // mounts shell with loading state, then refreshes
+                      // sidebar + boots iframe against hydrated selection.
 }
 
 // ── Wallet discovery (EIP-6963 + window.ethereum fallback) ───
@@ -915,6 +977,12 @@ async function connectWallet(idx) {
     if (entry.provider.on && !entry.provider.__dustopiaWired) {
       entry.provider.__dustopiaWired = true;
       entry.provider.on('accountsChanged', (accs) => {
+        // The provider listener is attached once and survives our own
+        // disconnect (we have no way to remove it because we don't keep
+        // a stable reference). Skip handling if the user is currently
+        // disconnected — otherwise switching accounts in the wallet
+        // extension would silently re-connect us.
+        if (!state.activeProvider) return;
         const next = ((accs && accs[0]) || '').toLowerCase();
         if (!next) { disconnect(); return; }
         state.address = next;
