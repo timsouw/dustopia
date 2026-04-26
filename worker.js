@@ -242,6 +242,34 @@ async function lookupOwner(tokenId, env) {
   return owner;
 }
 
+// Static SVG placeholder for the metadata `image` field. Marketplaces show
+// this in grids / search / Twitter previews where they can't run the live
+// animation_url iframe. Replace with an animated WebP rendered server-side
+// (Cloudflare Browser Rendering API) once that pipeline is built.
+async function handlePreview(rawTokenId, request) {
+  const tokenId = rawTokenId.replace(/\.(svg|png|webp)$/i, '');
+  if (!/^\d+$/.test(tokenId) || tokenId.length > 78) {
+    return errorResponse(400, 'invalid token id', request);
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" preserveAspectRatio="xMidYMid meet">
+  <rect width="800" height="800" fill="#14141a"/>
+  <g transform="translate(400 400)" fill="none" stroke="#3a3a44" stroke-width="1.2">
+    <circle r="220"/><circle r="180"/><circle r="140"/><circle r="100"/><circle r="60"/>
+    <ellipse rx="220" ry="70"/><ellipse rx="220" ry="140"/>
+    <ellipse rx="70" ry="220"/><ellipse rx="140" ry="220"/>
+  </g>
+  <text x="400" y="700" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="24" fill="#9a9aa5" letter-spacing="0.08em">dustopia #${tokenId}</text>
+  <text x="400" y="730" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="13" fill="#55555e" letter-spacing="0.04em">live wallet portrait — open to view</text>
+</svg>`;
+  return new Response(svg, {
+    headers: {
+      'Content-Type':                'image/svg+xml; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control':               `public, max-age=${METADATA_TTL}`,
+    },
+  });
+}
+
 async function handleMetadata(rawTokenId, request, env) {
   // Some contracts append .json; strip it defensively even though our test
   // contract (ERC721A) does not.
@@ -261,7 +289,7 @@ async function handleMetadata(rawTokenId, request, env) {
   return metadataResponse({
     name:          `dustopia #${tokenId}`,
     description:   "Living wallet portrait -- every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder's collection.",
-    image:         'https://dustopia.xyz/preview.png',
+    image:         `https://api.dustopia.xyz/api/preview/${tokenId}.svg`,
     animation_url: animUrl,
     external_url:  externalUrl,
     attributes:    [
@@ -295,6 +323,14 @@ export default {
     const metaMatch = path.match(/^\/api\/metadata\/([^/]+)\/?$/);
     if (metaMatch) {
       return handleMetadata(metaMatch[1], request, env);
+    }
+
+    // Preview image (SVG placeholder; eventually animated WebP from R2).
+    // Same exemption from rate limit as /api/metadata: this is hit by
+    // marketplace bots, must stay available, and the upstream cost is zero.
+    const previewMatch = path.match(/^\/api\/preview\/([^/]+)\/?$/);
+    if (previewMatch) {
+      return handlePreview(previewMatch[1], request);
     }
 
     if (!(await rateLimitOk(request, env))) {
