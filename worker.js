@@ -324,7 +324,7 @@ function previewSvg(tokenId) {
       ${dots}
     </g>
   </g>
-  <text x="400" y="700" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="24" fill="#9a9aa5" letter-spacing="0.08em">dustopia #${tokenId}</text>
+  <text x="400" y="700" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="24" fill="#9a9aa5" letter-spacing="0.08em">Dustopia #${tokenId}</text>
   <text x="400" y="730" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="13" fill="#55555e" letter-spacing="0.04em">live wallet portrait -- open to view</text>
 </svg>`;
 }
@@ -501,6 +501,29 @@ async function handlePreviewCap(addr, request, env, ctx) {
   return errorResponse(405, 'method not allowed', request);
 }
 
+// Best-effort owner-collection summary derived from the cached atlas meta
+// stored in R2. Returns { tokens, collections } if any meta is available,
+// or null if the address has never been built. Reads desktop grid first
+// (most adresses), falls back to mobile grid; either is fine since they
+// share the same token list.
+async function readOwnerSummary(owner, env) {
+  for (const grid of [192, 128]) {
+    const obj = await env.ATLAS.get(`${owner.toLowerCase()}/${grid}.json`);
+    if (!obj) continue;
+    let meta;
+    try { meta = await obj.json(); } catch { continue; }
+    if (!meta || !Array.isArray(meta.tokens)) continue;
+    const collections = new Set();
+    for (const t of meta.tokens) {
+      if (t && typeof t.collection === 'string' && t.collection.length) {
+        collections.add(t.collection);
+      }
+    }
+    return { tokens: meta.tokens.length, collections: collections.size };
+  }
+  return null;
+}
+
 async function handleMetadata(rawTokenId, request, env) {
   // Some contracts append .json; strip it defensively even though our test
   // contract (ERC721A) does not.
@@ -519,19 +542,33 @@ async function handleMetadata(rawTokenId, request, env) {
   // the landing page so the OpenSea "external link" still feels right.
   const animUrl     = `https://dustopia.xyz/embed/${owner}`;
   const externalUrl = `https://dustopia.xyz/#${owner}`;
+  const shortOwner  = `${owner.slice(0, 6)}…${owner.slice(-4)}`;
+
+  // Build OpenSea-style attributes. Token ID + Network are always present.
+  // Tokens / Collections are added when we have a cached atlas meta in R2;
+  // they update automatically as the holder's collection changes (the
+  // atlas is rebuilt + reuploaded on every full visit).
+  const attributes = [
+    { trait_type: 'Token ID', value: Number(tokenId) },
+    { trait_type: 'Network',  value: 'Ethereum' },
+    { trait_type: 'Owner',    value: shortOwner },
+  ];
+  const summary = await readOwnerSummary(owner, env).catch(() => null);
+  if (summary) {
+    attributes.push({ trait_type: 'Tokens',      value: summary.tokens,      display_type: 'number' });
+    attributes.push({ trait_type: 'Collections', value: summary.collections, display_type: 'number' });
+  }
 
   return metadataResponse({
-    name:          `dustopia #${tokenId}`,
+    name:          `Dustopia #${tokenId}`,
     description:   "Living wallet portrait -- every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder's collection.",
-    // Worker decides the actual MIME (GIF / WebP / SVG fallback) per request
-    // based on what's in R2 for the token's owner; the URL is extension-less
-    // so marketplaces don't lock onto a specific format.
+    // Worker decides the actual MIME (PNG / SVG fallback) per request based
+    // on what's in R2 for the token's owner; the URL is extension-less so
+    // marketplaces don't lock onto a specific format.
     image:         `https://api.dustopia.xyz/api/preview/${tokenId}`,
     animation_url: animUrl,
     external_url:  externalUrl,
-    attributes:    [
-      { trait_type: 'token_id', value: Number(tokenId) },
-    ],
+    attributes,
   }, request);
 }
 
