@@ -1,0 +1,25 @@
+# Cloudflare Pages headers — applied to every response served from
+# dustopia.xyz / dustopia.pages.dev. Cloudflare Workers (api.dustopia.xyz)
+# manage their own response headers in worker.js.
+
+/*
+  # Defense-in-depth XSS hardening. We already escape every dynamic
+  # interpolation via the esc() helper, but CSP catches anything we miss
+  # (or anything that shows up in a future refactor) without needing a
+  # full audit each time.
+  #
+  # 'unsafe-inline' on script-src + style-src is required because
+  # index.html and configure.html are zero-build single-file apps with
+  # inline <script> and <style> blocks. We use a hash-based CSP if/when
+  # we add a build step. img-src allows https: for Alchemy CDN
+  # thumbnails (they live on a few different hosts and rotate).
+  # connect-src restricts XHR to our own backends + the ENS resolver;
+  # this stops any compromised script from exfiltrating data to a third
+  # party. frame-ancestors restricts who can iframe us — OpenSea +
+  # ourselves; this is what makes the /embed view show inside the OpenSea
+  # NFT page without letting random third parties clickjack it.
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' blob:; connect-src 'self' https://api.dustopia.xyz https://api.ensideas.com; frame-src 'self'; frame-ancestors 'self' https://opensea.io https://*.opensea.io https://testnets.opensea.io https://*.seadn.io; base-uri 'self'; form-action 'self'
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload

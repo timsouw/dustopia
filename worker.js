@@ -63,14 +63,21 @@ const ALCH_TIMEOUT_MS = 12000;
 // (KV writes propagate within ~60s), so this is a soft deterrent against quota
 // drain rather than a precise throttle. For stricter limits, layer Cloudflare's
 // built-in rate-limiting rules on top.
-const RATE_LIMIT_PER_MIN = 60;
+//
+// Two buckets: GENERAL for read-heavy endpoints, PUT for write endpoints
+// (atlas, preview-cap, config). PUT is much tighter because every entry
+// touches R2 storage — abuse there has a real $ cost, while abuse of
+// reads only burns Worker CPU which Cloudflare already free-tier-caps.
+const RATE_LIMIT_PER_MIN     = 60;
+const RATE_LIMIT_PUT_PER_MIN = 10;
 
-async function rateLimitOk(request, env) {
+async function rateLimitOk(request, env, bucket = 'general') {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
   const minute = Math.floor(Date.now() / 60000);
-  const key = `rl:${ip}:${minute}`;
+  const cap = bucket === 'put' ? RATE_LIMIT_PUT_PER_MIN : RATE_LIMIT_PER_MIN;
+  const key = `rl:${bucket}:${ip}:${minute}`;
   const current = parseInt((await env.WALLET_CACHE.get(key)) || '0', 10);
-  if (current >= RATE_LIMIT_PER_MIN) return false;
+  if (current >= cap) return false;
   // Fire-and-forget increment; 90s TTL ensures keys self-expire.
   env.WALLET_CACHE.put(key, String(current + 1), { expirationTtl: 90 }).catch(() => {});
   return true;
@@ -657,6 +664,11 @@ const ATLAS_TOKEN_LIMIT = 1024;        // mirror MAX_TOKENS in index.html
 const ATLAS_META_MAX = 256 * 1024;     // 256 KiB ceiling for the JSON meta
 const ATLAS_BIN_MAX  = ATLAS_TOKEN_LIMIT * 192 * 192 * 3 + 1024;
 const ATLAS_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+// Hard ceiling on atlas R2 entries per address. Each saved selection adds
+// up to 4 entries (2 grids × bin/json), so even a holder with a dozen
+// saved selections lands well under this. Real purpose: stop unauthenticated
+// PUT spam from filling R2 with random fingerprints under one address.
+const ATLAS_PER_ADDR_CAP = 64;
 
 // Per-(addr, grid, fingerprint) cache key. The frontend computes a SHA-256
 // fingerprint of the selection blob and passes it as ?fp=<hex16>. fp='all'
@@ -800,7 +812,26 @@ async function handleAtlasPut(addr, grid, wantMeta, fp, request, env) {
   };
   if (isGzipped) httpMetadata.contentEncoding = ce;
 
-  await env.ATLAS.put(atlasKey(addr, grid, wantMeta ? 'json' : 'bin', fp), buf, { httpMetadata });
+  // Per-addr R2 entry cap. Atlas keys for one address fan out by grid
+  // (128/192) × fp (one per saved selection × bin/json). Even a heavy
+  // user shouldn't accumulate more than a few dozen entries; the cap
+  // here closes the unauthenticated-PUT spam vector without breaking
+  // the legitimate "anyone can populate the cache for any wallet"
+  // model. We only enforce when adding a NEW key; updates to an
+  // existing key (same fp) bypass the cap.
+  const targetKey = atlasKey(addr, grid, wantMeta ? 'json' : 'bin', fp);
+  const existing  = await env.ATLAS.head(targetKey).catch(() => null);
+  if (!existing) {
+    const list = await env.ATLAS.list({
+      prefix: `${addr.toLowerCase()}/`,
+      limit: ATLAS_PER_ADDR_CAP + 1,
+    }).catch(() => null);
+    if (list && list.objects.length >= ATLAS_PER_ADDR_CAP) {
+      return errorResponse(429, `atlas cache cap reached (${ATLAS_PER_ADDR_CAP} entries per address)`, request);
+    }
+  }
+
+  await env.ATLAS.put(targetKey, buf, { httpMetadata });
   return jsonResponse({ ok: true, bytes: buf.byteLength, encoded: isGzipped ? ce : null }, request);
 }
 
@@ -1178,10 +1209,12 @@ export default {
 
     // Atlas cache: GET (any browser), PUT (frontend after build), DELETE
     // (refresh button / future Alchemy webhook). Routed before the global
-    // method check below because it accepts non-GET methods.
+    // method check below because it accepts non-GET methods. PUTs use the
+    // tighter rate-limit bucket since each one writes R2.
     const atlasMatch = path.match(/^\/api\/atlas\/([^/]+)\/?$/);
     if (atlasMatch) {
-      if (!(await rateLimitOk(request, env))) {
+      const bucket = (request.method === 'PUT' || request.method === 'DELETE') ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handleAtlas(atlasMatch[1], request, env, ctx);
@@ -1189,11 +1222,11 @@ export default {
 
     // Preview capture upload/serve. PUT from /embed/<addr> after the sphere
     // is captured; HEAD from /embed/<addr> to skip re-captures; GET for
-    // direct testing. Routed before the global method check below because
-    // it accepts non-GET methods.
+    // direct testing.
     const previewCapMatch = path.match(/^\/api\/preview-cap\/([^/]+)\/?$/);
     if (previewCapMatch) {
-      if (!(await rateLimitOk(request, env))) {
+      const bucket = (request.method === 'PUT' || request.method === 'DELETE') ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handlePreviewCap(previewCapMatch[1], request, env, ctx);
@@ -1203,7 +1236,8 @@ export default {
     // Routed before the global GET-only check because PUT is allowed.
     const configMatch = path.match(/^\/api\/config\/([^/]+)\/?$/);
     if (configMatch) {
-      if (!(await rateLimitOk(request, env))) {
+      const bucket = request.method === 'PUT' ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handleConfig(configMatch[1], request, env, ctx);

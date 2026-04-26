@@ -6,9 +6,9 @@
 .dev.vars
 .mf/
 
-# Node (if we ever add tooling)
+# Node — package-lock.json IS committed (supply-chain pinning) but
+# node_modules/ never is.
 node_modules/
-package-lock.json
 *.log
 
 # Editor
