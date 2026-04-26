@@ -16,9 +16,16 @@
 //   - Wallet pages: 30 minutes (NFT holdings change, but rarely on minute scale)
 //   - ENS resolves: 24 hours (names rarely change)
 
-// CORS: production sites only. Direct visits (no Origin header, e.g. curl or
-// the browser address bar) are also allowed so /api/health etc. stay testable.
-// All other origins get null ACAO and effectively cannot read responses from JS.
+// CORS: production sites only. Browser direct-navigation and server-to-server
+// callers (curl, marketplace bots) don't send Origin — for those we omit ACAO
+// entirely, which means a same-origin response with no cross-origin promise.
+// Browsers refuse to expose such responses to JS on other origins, so this is
+// safer than the old `*` fallback (which let arbitrary pages read sensitive
+// per-wallet data via fetch).
+//
+// Marketplace-serving endpoints (/api/metadata/, /api/preview/) explicitly
+// override to `*` via metadataResponse / their own headers — they're public
+// by contract and need to be reachable by anonymous bots.
 const ALLOWED_ORIGINS = new Set([
   'https://dustopia.xyz',
   'https://www.dustopia.xyz',
@@ -28,15 +35,24 @@ const PAGES_PREVIEW_RE = /^https:\/\/[a-z0-9-]+\.dustopia\.pages\.dev$/;
 
 function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '';
-  const allowed = !origin || ALLOWED_ORIGINS.has(origin) || PAGES_PREVIEW_RE.test(origin);
-  return {
-    'Access-Control-Allow-Origin':  allowed ? (origin || '*') : 'null',
+  const allowed = origin && (ALLOWED_ORIGINS.has(origin) || PAGES_PREVIEW_RE.test(origin));
+  const headers = {
     'Vary':                         'Origin',
     'Access-Control-Allow-Methods': 'GET, HEAD, PUT, DELETE, OPTIONS',
     // Content-Encoding is required for gzipped atlas uploads (PUT /api/atlas/...).
     'Access-Control-Allow-Headers': 'Content-Type, Content-Encoding',
     'Access-Control-Max-Age':       '86400',
   };
+  if (allowed) {
+    headers['Access-Control-Allow-Origin'] = origin;
+  } else if (origin) {
+    // Origin present but disallowed — explicit null blocks JS reads.
+    headers['Access-Control-Allow-Origin'] = 'null';
+  }
+  // No Origin header (direct nav, curl, server-to-server) → omit ACAO. The
+  // response still arrives, but a browser context with a different Origin
+  // can't expose it to JS without a permissive ACAO header.
+  return headers;
 }
 
 const WALLET_TTL = 30 * 60;          // 30 minutes
@@ -95,11 +111,20 @@ async function upstreamFetch(url, attempts = 3) {
   throw lastErr;
 }
 
+// Alchemy pageKey is an opaque base64ish token. We pass it back upstream
+// untouched, but cap the length and limit the charset so a malicious caller
+// can't smuggle path-traversal or huge values into our cache key.
+const PAGE_KEY_RE = /^[A-Za-z0-9_=:.\-]{1,512}$/;
+
 async function handleWallet(address, pageKey, request, env) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
     return errorResponse(400, 'invalid address', request);
   }
-  const cacheKey = `wallet:${address.toLowerCase()}:${pageKey || ''}`;
+  if (pageKey && !PAGE_KEY_RE.test(pageKey)) {
+    return errorResponse(400, 'invalid pageKey', request);
+  }
+  const addrLower = address.toLowerCase();
+  const cacheKey = `wallet:${addrLower}:${pageKey || ''}`;
 
   // Try KV cache first
   const cached = await env.WALLET_CACHE.get(cacheKey);
@@ -130,11 +155,18 @@ async function handleWallet(address, pageKey, request, env) {
   return jsonResponse(body, request, { headers: { 'X-Cache': 'MISS' } });
 }
 
-async function handleEns(name, request, env) {
-  if (!/^[a-z0-9.-]{3,253}\.eth$/i.test(name)) {
+// ENS labels: a-z 0-9 hyphen, 1-63 chars per label, no leading/trailing hyphen,
+// dot-separated, must end in .eth. Reject anything else before it hits the
+// upstream resolver or pollutes our KV cache (cache key uses the lowercased
+// name, so we normalize before doing anything with it).
+const ENS_LABEL_RE = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+eth$/;
+
+async function handleEns(rawName, request, env) {
+  const name = String(rawName || '').toLowerCase();
+  if (name.length < 5 || name.length > 253 || !ENS_LABEL_RE.test(name)) {
     return errorResponse(400, 'invalid ENS name', request);
   }
-  const cacheKey = `ens:${name.toLowerCase()}`;
+  const cacheKey = `ens:${name}`;
 
   const cached = await env.WALLET_CACHE.get(cacheKey);
   if (cached) {
@@ -292,7 +324,7 @@ function previewSvg(tokenId) {
       ${dots}
     </g>
   </g>
-  <text x="400" y="700" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="24" fill="#9a9aa5" letter-spacing="0.08em">dustopia #${tokenId}</text>
+  <text x="400" y="700" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="24" fill="#9a9aa5" letter-spacing="0.08em">Dustopia #${tokenId}</text>
   <text x="400" y="730" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="13" fill="#55555e" letter-spacing="0.04em">live wallet portrait -- open to view</text>
 </svg>`;
 }
@@ -309,7 +341,10 @@ async function handlePreview(rawTokenId, request, env, ctx) {
 
   // Resolve owner so we can look up their captured preview. Falls back to
   // the deploy wallet on transient lookup failure (matches metadata behaviour).
-  const owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  // Re-validate before constructing R2 keys so a malformed upstream value
+  // can't traverse outside the preview/ prefix.
+  let owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  if (!/^0x[0-9a-f]{40}$/.test(owner)) owner = OWNER_FALLBACK;
   const previewKey = `preview/${owner}.bin`;
 
   // Try R2 first. Wrap with edge cache so popular tokens skip the R2 op
@@ -334,8 +369,9 @@ async function handlePreview(rawTokenId, request, env, ctx) {
       'X-Edge-Cache':                'MISS',
     });
     obj.writeHttpMetadata(headers);
-    // httpMetadata remembers whether the stored asset is GIF or WebP.
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/gif');
+    // httpMetadata remembers the stored asset's actual type (PNG today,
+    // historical entries may still be GIF or WebP).
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/png');
     const resp = new Response(obj.body, { headers });
     if (ctx) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
     return resp;
@@ -371,16 +407,22 @@ async function handlePreview(rawTokenId, request, env, ctx) {
 //
 // V1 is unauthenticated like atlas. Size + MIME validated; SIWE-gated PUT
 // is the eventual hardening.
-const PREVIEW_MAX = 12 * 1024 * 1024;    // 12 MiB ceiling — real GIF captures are ~1-4 MiB
-const PREVIEW_MIN = 1024;                // weed out empty PUTs
-// Accept animated GIF or animated WebP. GIF is what the frontend actually
-// produces today (gif.js is the most reliable browser-side encoder); WebP
-// is allowed so we can swap encoders later without changing the Worker.
-const PREVIEW_OK_TYPES = ['image/gif', 'image/webp'];
+const PREVIEW_MAX = 4 * 1024 * 1024;     // 4 MiB ceiling — PNG snapshots run ~150-500 KiB
+const PREVIEW_MIN = 512;                 // weed out empty/garbage PUTs
+// Accept PNG (current frontend), JPEG, GIF, WebP. We sniff magic bytes on
+// PUT and reject anything that doesn't match its declared Content-Type, so
+// the Worker is encoder-agnostic and we can swap formats client-side later
+// without redeploying.
+const PREVIEW_OK_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
 function detectImageType(buf) {
   if (buf.byteLength < 12) return null;
   const sig = new Uint8Array(buf, 0, 12);
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (sig[0] === 0x89 && sig[1] === 0x50 && sig[2] === 0x4e && sig[3] === 0x47
+   && sig[4] === 0x0d && sig[5] === 0x0a && sig[6] === 0x1a && sig[7] === 0x0a) return 'image/png';
+  // JPEG: FF D8 FF
+  if (sig[0] === 0xff && sig[1] === 0xd8 && sig[2] === 0xff) return 'image/jpeg';
   // GIF89a / GIF87a
   if (sig[0] === 0x47 && sig[1] === 0x49 && sig[2] === 0x46 && sig[3] === 0x38) return 'image/gif';
   // RIFF .... WEBP
@@ -400,7 +442,7 @@ async function handlePreviewCap(addr, request, env, ctx) {
   if (request.method === 'HEAD') {
     const head = await env.ATLAS.head(key);
     if (!head) return errorResponse(404, 'no preview cached', request);
-    const ct = (head.httpMetadata && head.httpMetadata.contentType) || 'image/gif';
+    const ct = (head.httpMetadata && head.httpMetadata.contentType) || 'image/png';
     return new Response(null, {
       status: 200,
       headers: {
@@ -419,7 +461,7 @@ async function handlePreviewCap(addr, request, env, ctx) {
       'Cache-Control':               'public, max-age=3600',
     });
     obj.writeHttpMetadata(headers);
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/gif');
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/png');
     return new Response(obj.body, { headers });
   }
 
@@ -428,16 +470,22 @@ async function handlePreviewCap(addr, request, env, ctx) {
     if (!PREVIEW_OK_TYPES.includes(ct)) {
       return errorResponse(415, `expected one of ${PREVIEW_OK_TYPES.join(', ')}`, request);
     }
-    const len = parseInt(request.headers.get('Content-Length') || '0', 10);
-    if (len > PREVIEW_MAX) {
-      return errorResponse(413, `body too large (${len} > ${PREVIEW_MAX})`, request);
-    }
+    // Require Content-Length so we reject oversize bodies BEFORE buffering
+    // any of them. Browser fetch() with Blob body always sets it; clients
+    // that send chunked-encoded uploads have to declare their size up-front.
+    const lenHdr = request.headers.get('Content-Length');
+    if (!lenHdr) return errorResponse(411, 'Content-Length required', request);
+    const len = parseInt(lenHdr, 10);
+    if (!Number.isFinite(len) || len < 0) return errorResponse(400, 'invalid Content-Length', request);
+    if (len > PREVIEW_MAX) return errorResponse(413, `body too large (${len} > ${PREVIEW_MAX})`, request);
+    if (len < PREVIEW_MIN) return errorResponse(400, 'body too small', request);
+
     const buf = await request.arrayBuffer();
-    if (buf.byteLength > PREVIEW_MAX) return errorResponse(413, 'body too large', request);
-    if (buf.byteLength < PREVIEW_MIN) return errorResponse(400, 'body too small', request);
+    // Defense in depth: actual body length must match the declared Content-Length.
+    if (buf.byteLength !== len)        return errorResponse(400, 'body length mismatch', request);
     const detected = detectImageType(buf);
-    if (!detected) return errorResponse(400, 'unrecognized image format', request);
-    if (detected !== ct) return errorResponse(400, `body is ${detected} but Content-Type is ${ct}`, request);
+    if (!detected)                     return errorResponse(400, 'unrecognized image format', request);
+    if (detected !== ct)               return errorResponse(400, `body is ${detected} but Content-Type is ${ct}`, request);
 
     await env.ATLAS.put(key, buf, {
       httpMetadata: { contentType: detected },
@@ -453,6 +501,29 @@ async function handlePreviewCap(addr, request, env, ctx) {
   return errorResponse(405, 'method not allowed', request);
 }
 
+// Best-effort owner-collection summary derived from the cached atlas meta
+// stored in R2. Returns { tokens, collections } if any meta is available,
+// or null if the address has never been built. Reads desktop grid first
+// (most adresses), falls back to mobile grid; either is fine since they
+// share the same token list.
+async function readOwnerSummary(owner, env) {
+  for (const grid of [192, 128]) {
+    const obj = await env.ATLAS.get(`${owner.toLowerCase()}/${grid}.json`);
+    if (!obj) continue;
+    let meta;
+    try { meta = await obj.json(); } catch { continue; }
+    if (!meta || !Array.isArray(meta.tokens)) continue;
+    const collections = new Set();
+    for (const t of meta.tokens) {
+      if (t && typeof t.collection === 'string' && t.collection.length) {
+        collections.add(t.collection);
+      }
+    }
+    return { tokens: meta.tokens.length, collections: collections.size };
+  }
+  return null;
+}
+
 async function handleMetadata(rawTokenId, request, env) {
   // Some contracts append .json; strip it defensively even though our test
   // contract (ERC721A) does not.
@@ -462,25 +533,42 @@ async function handleMetadata(rawTokenId, request, env) {
   }
 
   // Look up the current owner; fall back to the deploy wallet so transient
-  // upstream failures don't blank the NFT in marketplaces.
-  const owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  // upstream failures don't blank the NFT in marketplaces. Re-validate the
+  // address shape one more time before interpolating into URLs — defensive
+  // against any future code path that bypasses lookupOwner's own checks.
+  let owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  if (!/^0x[0-9a-f]{40}$/.test(owner)) owner = OWNER_FALLBACK;
   // animation_url → chrome-free embed view (just the sphere). external_url →
   // the landing page so the OpenSea "external link" still feels right.
   const animUrl     = `https://dustopia.xyz/embed/${owner}`;
   const externalUrl = `https://dustopia.xyz/#${owner}`;
+  const shortOwner  = `${owner.slice(0, 6)}…${owner.slice(-4)}`;
+
+  // Build OpenSea-style attributes. Token ID + Network are always present.
+  // Tokens / Collections are added when we have a cached atlas meta in R2;
+  // they update automatically as the holder's collection changes (the
+  // atlas is rebuilt + reuploaded on every full visit).
+  const attributes = [
+    { trait_type: 'Token ID', value: Number(tokenId) },
+    { trait_type: 'Network',  value: 'Ethereum' },
+    { trait_type: 'Owner',    value: shortOwner },
+  ];
+  const summary = await readOwnerSummary(owner, env).catch(() => null);
+  if (summary) {
+    attributes.push({ trait_type: 'Tokens',      value: summary.tokens,      display_type: 'number' });
+    attributes.push({ trait_type: 'Collections', value: summary.collections, display_type: 'number' });
+  }
 
   return metadataResponse({
-    name:          `dustopia #${tokenId}`,
+    name:          `Dustopia #${tokenId}`,
     description:   "Living wallet portrait -- every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder's collection.",
-    // Worker decides the actual MIME (GIF / WebP / SVG fallback) per request
-    // based on what's in R2 for the token's owner; the URL is extension-less
-    // so marketplaces don't lock onto a specific format.
+    // Worker decides the actual MIME (PNG / SVG fallback) per request based
+    // on what's in R2 for the token's owner; the URL is extension-less so
+    // marketplaces don't lock onto a specific format.
     image:         `https://api.dustopia.xyz/api/preview/${tokenId}`,
     animation_url: animUrl,
     external_url:  externalUrl,
-    attributes:    [
-      { trait_type: 'token_id', value: Number(tokenId) },
-    ],
+    attributes,
   }, request);
 }
 
@@ -581,12 +669,17 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
   const isGzipped = !wantMeta && (ce === 'gzip' || ce === 'deflate' || ce === 'br');
 
   const max = wantMeta ? ATLAS_META_MAX : ATLAS_BIN_MAX;
-  const len = parseInt(request.headers.get('Content-Length') || '0', 10);
-  if (len > max) return errorResponse(413, `body too large (${len} > ${max})`, request);
+  // Require Content-Length so we reject oversize bodies BEFORE buffering
+  // any of them. Browser fetch() with ArrayBuffer / Blob body always sets it.
+  const lenHdr = request.headers.get('Content-Length');
+  if (!lenHdr) return errorResponse(411, 'Content-Length required', request);
+  const len = parseInt(lenHdr, 10);
+  if (!Number.isFinite(len) || len < 0) return errorResponse(400, 'invalid Content-Length', request);
+  if (len > max)  return errorResponse(413, `body too large (${len} > ${max})`, request);
+  if (len === 0) return errorResponse(400, 'empty body', request);
 
   const buf = await request.arrayBuffer();
-  if (buf.byteLength > max) return errorResponse(413, 'body too large', request);
-  if (!buf.byteLength) return errorResponse(400, 'empty body', request);
+  if (buf.byteLength !== len) return errorResponse(400, 'body length mismatch', request);
 
   // Binary sanity check: only meaningful for raw uploads. For compressed
   // uploads we trust the client's framing — corruption would cause the
@@ -603,7 +696,10 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
     }
   } else if (wantMeta) {
     // Meta: must be valid JSON with the expected shape. Reject anything else
-    // before it lands in the bucket.
+    // before it lands in the bucket. We also cap the per-token string
+    // lengths so a malicious client can't shove a few MB of payload into
+    // each entry of a 1024-token array.
+    const TOKEN_FIELD_MAX = 256;
     let meta;
     try { meta = JSON.parse(new TextDecoder().decode(buf)); }
     catch { return errorResponse(400, 'meta is not valid JSON', request); }
@@ -612,6 +708,20 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
     }
     if (meta.count > ATLAS_TOKEN_LIMIT || meta.tokens.length !== meta.count) {
       return errorResponse(400, 'meta.count inconsistent', request);
+    }
+    if (meta.lods.length > 8) {
+      return errorResponse(400, 'meta.lods too large', request);
+    }
+    for (let i = 0; i < meta.tokens.length; i++) {
+      const t = meta.tokens[i];
+      if (!t || typeof t !== 'object') return errorResponse(400, `meta.tokens[${i}] must be object`, request);
+      const c = t.collection, id = t.tokenId;
+      if (c  !== undefined && (typeof c  !== 'string' || c.length  > TOKEN_FIELD_MAX)) {
+        return errorResponse(400, `meta.tokens[${i}].collection invalid`, request);
+      }
+      if (id !== undefined && (typeof id !== 'string' || id.length > TOKEN_FIELD_MAX)) {
+        return errorResponse(400, `meta.tokens[${i}].tokenId invalid`, request);
+      }
     }
   }
 
