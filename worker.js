@@ -243,30 +243,73 @@ async function lookupOwner(tokenId, env) {
   return owner;
 }
 
-// Static SVG placeholder for the metadata `image` field. Marketplaces show
+// Animated SVG placeholder for the metadata `image` field. Marketplaces show
 // this in grids / search / Twitter previews where they can't run the live
-// animation_url iframe. Replace with an animated WebP rendered server-side
-// (Cloudflare Browser Rendering API) once that pipeline is built.
+// animation_url iframe. SMIL animation (animateTransform / animate) survives
+// most marketplace SVG sanitizers — we'll know within a day whether OpenSea
+// preserves it. Per-token hue + rotation phase keeps each tile distinct so
+// the grid reads as a curated set rather than a wall of clones.
+//
+// TODO: replace with a real Cloudflare Browser Rendering capture of the
+// live sphere (animated WebP, ~5s loop). This SVG is a stand-in until then.
 async function handlePreview(rawTokenId, request) {
   const tokenId = rawTokenId.replace(/\.(svg|png|webp)$/i, '');
   if (!/^\d+$/.test(tokenId) || tokenId.length > 78) {
     return errorResponse(400, 'invalid token id', request);
   }
+  const id    = parseInt(tokenId, 10) || 0;
+  const hue   = (id * 47) % 360;        // distinct base hue per token
+  const phase = (id * 13) % 360;        // distinct starting rotation
+  const dots  = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map(deg => {
+    const rad = deg * Math.PI / 180;
+    const x = (Math.cos(rad) * 230).toFixed(1);
+    const y = (Math.sin(rad) * 230).toFixed(1);
+    const dotHue = (hue + deg) % 360;
+    const begin  = (deg / 360 * 3).toFixed(2);
+    return `<circle cx="${x}" cy="${y}" r="3" fill="hsl(${dotHue},70%,75%)"><animate attributeName="opacity" values="0.15;1;0.15" dur="3s" begin="${begin}s" repeatCount="indefinite"/></circle>`;
+  }).join('');
+
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" preserveAspectRatio="xMidYMid meet">
+  <defs>
+    <radialGradient id="g${id}" cx="38%" cy="32%" r="65%">
+      <stop offset="0%"   stop-color="hsl(${hue},80%,90%)" stop-opacity="0.95"/>
+      <stop offset="35%"  stop-color="hsl(${(hue + 30) % 360},65%,68%)" stop-opacity="0.85"/>
+      <stop offset="70%"  stop-color="hsl(${(hue + 60) % 360},55%,38%)" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#0a0a12" stop-opacity="0.95"/>
+    </radialGradient>
+  </defs>
   <rect width="800" height="800" fill="#14141a"/>
-  <g transform="translate(400 400)" fill="none" stroke="#3a3a44" stroke-width="1.2">
-    <circle r="220"/><circle r="180"/><circle r="140"/><circle r="100"/><circle r="60"/>
-    <ellipse rx="220" ry="70"/><ellipse rx="220" ry="140"/>
-    <ellipse rx="70" ry="220"/><ellipse rx="140" ry="220"/>
+  <circle cx="400" cy="400" r="240" fill="url(#g${id})">
+    <animate attributeName="opacity" values="0.55;0.85;0.55" dur="5s" repeatCount="indefinite"/>
+    <animate attributeName="r" values="220;255;220" dur="6s" repeatCount="indefinite"/>
+  </circle>
+  <g transform="translate(400 400)">
+    <g fill="none" stroke="#3a3a44" stroke-width="1.2">
+      <animateTransform attributeName="transform" type="rotate" from="${phase}" to="${phase + 360}" dur="24s" repeatCount="indefinite"/>
+      <ellipse rx="220" ry="220"/>
+      <ellipse rx="220" ry="160"/>
+      <ellipse rx="220" ry="100"/>
+      <ellipse rx="220" ry="40"/>
+      <ellipse rx="40"  ry="220"/>
+      <ellipse rx="100" ry="220"/>
+      <ellipse rx="160" ry="220"/>
+    </g>
+    <g>
+      <animateTransform attributeName="transform" type="rotate" from="0" to="-360" dur="32s" repeatCount="indefinite"/>
+      ${dots}
+    </g>
   </g>
   <text x="400" y="700" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="24" fill="#9a9aa5" letter-spacing="0.08em">dustopia #${tokenId}</text>
-  <text x="400" y="730" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="13" fill="#55555e" letter-spacing="0.04em">live wallet portrait — open to view</text>
+  <text x="400" y="730" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="13" fill="#55555e" letter-spacing="0.04em">live wallet portrait -- open to view</text>
 </svg>`;
   return new Response(svg, {
     headers: {
       'Content-Type':                'image/svg+xml; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
-      'Cache-Control':               `public, max-age=${METADATA_TTL}`,
+      // SVG content is deterministic per tokenId — cache for a day to cut
+      // worker invocations to a trickle. If we change the visuals we'll
+      // either DELETE the relevant cache entries or wait out the TTL.
+      'Cache-Control':               'public, max-age=86400',
     },
   });
 }
