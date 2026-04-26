@@ -12,7 +12,7 @@
 # from CLI, the namespace ID below must match. Get it via:
 #   wrangler kv:namespace list
 
-name = "franken-api"
+name = "dustopia"
 main = "worker.js"
 compatibility_date = "2026-04-25"
 
