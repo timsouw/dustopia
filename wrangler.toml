@@ -14,15 +14,26 @@
 
 name = "franken-api"
 main = "worker.js"
-compatibility_date = "2024-10-01"
+compatibility_date = "2026-04-25"
+
+# Custom domain — declared before [[kv_namespaces]] so it's parsed at the
+# top level instead of being absorbed into the kv_namespaces table.
+routes = [
+  { pattern = "api.dustopia.xyz", custom_domain = true }
+]
+
+# Match the dashboard defaults so `wrangler deploy` doesn't drift back to
+# legacy values on every run.
+preview_urls = true
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
 
 # KV binding — points to the WALLET_CACHE namespace already created in dashboard.
 # Replace the id with the actual namespace id (from `wrangler kv:namespace list`).
 [[kv_namespaces]]
 binding = "WALLET_CACHE"
 id      = "043aff23e1894533b81aaab958718377"
-
-# Custom domain
-routes = [
-  { pattern = "api.dustopia.xyz", custom_domain = true }
-]
