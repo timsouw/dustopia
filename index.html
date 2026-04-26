@@ -260,8 +260,8 @@ const SPHERE_SCALE_A   = 0.42;
 const SPHERE_SCALE_B   = 0.09;   // tamer than 0.17 — with N=500 the growth is already huge
 // Hard floor + cap (% of min(W,H)) so low-N wallets still look filled and high-N
 // wallets can't escape the viewport. Floor is what fixes the "1 token = invisible" case.
-const SPHERE_FRAC_MIN  = 0.20;   // never smaller than 20% of the shorter viewport edge
-const SPHERE_FRAC_MAX  = 0.23;   // tightened from 0.25 to leave room for outer-layer collections
+const SPHERE_FRAC_MIN  = 0.17;   // ≈ 17% of shorter viewport edge — leaves a breathing margin so wave-amp particles don't kiss the canvas edge while rotating
+const SPHERE_FRAC_MAX  = 0.20;   // matched to the new MIN ratio (was 0.23) so silhouette safety still scales with default size
 
 // --- collection layering: each collection lives on one of LAYER_COUNT concentric shells ---
 // The base unit sphere is r=1.0. Inner shells (<1.0) sit closer to center, outer (>1.0)
@@ -635,6 +635,108 @@ async function gzipBuffer(buf) {
   } catch { return null; }
 }
 
+// =====================================================================
+// PREVIEW CAPTURE — record ~5s of the live sphere as an animated WebP and
+// upload to R2. OpenSea grid tiles can't run our /embed iframe so they
+// fetch the metadata `image` URL; that URL transparently returns this
+// captured WebP once ANY visitor has seeded R2 for the wallet. First
+// visitor pays the (~1s) capture+encode cost; everyone after them sees
+// instant grid animation.
+// =====================================================================
+
+const PREVIEW_W       = 400;
+const PREVIEW_H       = 400;
+const PREVIEW_FRAMES  = 60;
+const PREVIEW_FPS     = 12;
+const PREVIEW_INTERVAL_MS = 1000 / PREVIEW_FPS;
+const PREVIEW_LIB_BASE = 'https://unpkg.com/webpxmux@1.0.0/dist/';
+
+// Lazy-load the webpxmux wasm encoder. Only invoked once we've confirmed
+// we actually need to capture (i.e. R2 doesn't already have a fresh WebP
+// for this address). Returns the muxer instance or throws.
+let _webpxmuxPromise = null;
+function loadWebpMuxer() {
+  if (_webpxmuxPromise) return _webpxmuxPromise;
+  _webpxmuxPromise = (async () => {
+    if (typeof WebPXMux === 'undefined') {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src   = PREVIEW_LIB_BASE + 'webpxmux.min.js';
+        script.onload  = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    }
+    if (typeof WebPXMux === 'undefined') throw new Error('WebPXMux unavailable after script load');
+    const xmux = WebPXMux(PREVIEW_LIB_BASE + 'webpxmux.wasm');
+    await xmux.waitRuntime();
+    return xmux;
+  })().catch(e => { _webpxmuxPromise = null; throw e; });
+  return _webpxmuxPromise;
+}
+
+// Returns true if R2 already has a captured preview for this addr — in which
+// case we skip the (cheap but wasteful) re-capture cycle on this visit.
+async function hasCachedPreview(addr) {
+  if (!API_URL) return false;
+  try {
+    const r = await fetch(`${API_URL}/api/preview-cap/${addr}`, { method: 'HEAD' });
+    return r.ok;
+  } catch { return false; }
+}
+
+async function tryCaptureAndUploadPreview(addr) {
+  if (!API_URL || !addr) return;
+  if (await hasCachedPreview(addr)) return;          // someone else already seeded it
+
+  const stage = document.getElementById('stage');
+  if (!stage) return;
+  const off    = document.createElement('canvas');
+  off.width    = PREVIEW_W;
+  off.height   = PREVIEW_H;
+  const offCtx = off.getContext('2d', { willReadFrequently: true });
+
+  // Capture frames at PREVIEW_FPS, downscaled to PREVIEW_W × PREVIEW_H.
+  // Using setTimeout (not requestAnimationFrame) to decouple capture pace
+  // from render pace — we want a steady 12fps even if render hits 144Hz.
+  const frames = [];
+  for (let i = 0; i < PREVIEW_FRAMES; i++) {
+    const t0 = performance.now();
+    offCtx.drawImage(stage, 0, 0, PREVIEW_W, PREVIEW_H);
+    let rgba;
+    try { rgba = offCtx.getImageData(0, 0, PREVIEW_W, PREVIEW_H).data; }
+    catch { return; }
+    frames.push({ duration: PREVIEW_INTERVAL_MS, isKeyframe: i === 0, rgba });
+    const wait = Math.max(0, PREVIEW_INTERVAL_MS - (performance.now() - t0));
+    await new Promise(r => setTimeout(r, wait));
+  }
+
+  let xmux;
+  try { xmux = await loadWebpMuxer(); }
+  catch (e) { console.warn('webpxmux load failed', e); return; }
+
+  let buf;
+  try {
+    buf = await xmux.encodeFrames({
+      frameCount: frames.length,
+      width:      PREVIEW_W,
+      height:     PREVIEW_H,
+      loopCount:  0,                     // 0 = loop forever
+      bgColor:    0xff14141a,            // ARGB matching site bg
+      frames,
+    });
+  } catch (e) { console.warn('webpxmux encode failed', e); return; }
+
+  try {
+    const r = await fetch(`${API_URL}/api/preview-cap/${addr}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'image/webp' },
+      body:    buf,
+    });
+    if (!r.ok) console.warn('preview upload', r.status);
+  } catch (e) { console.warn('preview upload err', e); }
+}
+
 // Fire-and-forget upload of a freshly-built atlas. Binary first (the
 // expensive payload), then meta — meta is the "ready" sentinel a future
 // reader checks first, so this ordering guarantees no half-cached state.
@@ -806,6 +908,11 @@ async function main() {
   const eStat = document.getElementById('embedStatus');
   if (eStat) eStat.style.display = 'none';
 
+  // Fire the preview-capture pipeline ~3s after first paint so particles
+  // have settled into their natural motion before we record. Skipped if R2
+  // already has a fresh capture for this wallet (HEAD check inside).
+  setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, 3000);
+
   // Collapse the load panel into a small pill that stays clickable.
   // The h1 inside displays the loaded wallet's ENS or short 0x address.
   setTimeout(() => {
@@ -848,7 +955,12 @@ async function main() {
   // 2) SETUP GL
   // =============================================================
   const canvas = document.getElementById('stage');
-  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+  // preserveDrawingBuffer:true keeps the WebGL backbuffer readable after
+  // each frame so the preview-capture path can sample pixels via
+  // drawImage(canvas, ...) at any moment. Without this the buffer is cleared
+  // post-swap and toBlob() / drawImage() return black mid-frame. Minor perf
+  // tax (~5-10%) but acceptable at 60fps on this workload.
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true });
   if (!gl) {
     showError('<b>WebGL2 not available.</b> Try a recent Chrome, Firefox, or Safari.');
     return;

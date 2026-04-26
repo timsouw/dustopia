@@ -32,7 +32,7 @@ function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin':  allowed ? (origin || '*') : 'null',
     'Vary':                         'Origin',
-    'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, HEAD, PUT, DELETE, OPTIONS',
     // Content-Encoding is required for gzipped atlas uploads (PUT /api/atlas/...).
     'Access-Control-Allow-Headers': 'Content-Type, Content-Encoding',
     'Access-Control-Max-Age':       '86400',
@@ -243,23 +243,17 @@ async function lookupOwner(tokenId, env) {
   return owner;
 }
 
-// Animated SVG placeholder for the metadata `image` field. Marketplaces show
-// this in grids / search / Twitter previews where they can't run the live
+// Animated SVG fallback for the metadata `image` field. Used when no captured
+// WebP exists in R2 yet for this token's owner. Marketplaces show this in
+// grids / search / Twitter previews where they can't run the live
 // animation_url iframe. SMIL animation (animateTransform / animate) survives
 // most marketplace SVG sanitizers — we'll know within a day whether OpenSea
 // preserves it. Per-token hue + rotation phase keeps each tile distinct so
 // the grid reads as a curated set rather than a wall of clones.
-//
-// TODO: replace with a real Cloudflare Browser Rendering capture of the
-// live sphere (animated WebP, ~5s loop). This SVG is a stand-in until then.
-async function handlePreview(rawTokenId, request) {
-  const tokenId = rawTokenId.replace(/\.(svg|png|webp)$/i, '');
-  if (!/^\d+$/.test(tokenId) || tokenId.length > 78) {
-    return errorResponse(400, 'invalid token id', request);
-  }
+function previewSvg(tokenId) {
   const id    = parseInt(tokenId, 10) || 0;
-  const hue   = (id * 47) % 360;        // distinct base hue per token
-  const phase = (id * 13) % 360;        // distinct starting rotation
+  const hue   = (id * 47) % 360;
+  const phase = (id * 13) % 360;
   const dots  = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map(deg => {
     const rad = deg * Math.PI / 180;
     const x = (Math.cos(rad) * 230).toFixed(1);
@@ -268,8 +262,7 @@ async function handlePreview(rawTokenId, request) {
     const begin  = (deg / 360 * 3).toFixed(2);
     return `<circle cx="${x}" cy="${y}" r="3" fill="hsl(${dotHue},70%,75%)"><animate attributeName="opacity" values="0.15;1;0.15" dur="3s" begin="${begin}s" repeatCount="indefinite"/></circle>`;
   }).join('');
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" preserveAspectRatio="xMidYMid meet">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" preserveAspectRatio="xMidYMid meet">
   <defs>
     <radialGradient id="g${id}" cx="38%" cy="32%" r="65%">
       <stop offset="0%"   stop-color="hsl(${hue},80%,90%)" stop-opacity="0.95"/>
@@ -302,16 +295,151 @@ async function handlePreview(rawTokenId, request) {
   <text x="400" y="700" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="24" fill="#9a9aa5" letter-spacing="0.08em">dustopia #${tokenId}</text>
   <text x="400" y="730" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="13" fill="#55555e" letter-spacing="0.04em">live wallet portrait -- open to view</text>
 </svg>`;
-  return new Response(svg, {
+}
+
+// Resolve token preview: animated WebP captured by a real visitor's browser
+// if we have one in R2, otherwise the animated SVG fallback. The URL accepts
+// .webp / .svg / no extension — Worker decides the response media type based
+// on what's actually stored, not the suffix.
+async function handlePreview(rawTokenId, request, env, ctx) {
+  const tokenId = rawTokenId.replace(/\.(svg|png|webp|gif)$/i, '');
+  if (!/^\d+$/.test(tokenId) || tokenId.length > 78) {
+    return errorResponse(400, 'invalid token id', request);
+  }
+
+  // Resolve owner so we can look up their captured preview. Falls back to
+  // the deploy wallet on transient lookup failure (matches metadata behaviour).
+  const owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
+  const webpKey = `preview/${owner}.webp`;
+
+  // Try R2 first. Wrap with edge cache so popular tokens skip the R2 op
+  // entirely on the second hit per region.
+  const cache = caches.default;
+  const cacheKey = new Request(new URL(request.url).toString(), { method: 'GET' });
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const h = new Headers(hit.headers);
+    h.set('X-Edge-Cache', 'HIT');
+    return new Response(hit.body, { status: hit.status, headers: h });
+  }
+
+  const obj = await env.ATLAS.get(webpKey);
+  if (obj) {
+    const headers = new Headers({
+      'Access-Control-Allow-Origin': '*',
+      // Short TTL so re-captures (after a wallet's holdings change) propagate
+      // within an hour to marketplaces. The edge cache layer above handles
+      // the high-RPS amortization.
+      'Cache-Control':               'public, max-age=3600',
+      'X-Edge-Cache':                'MISS',
+    });
+    obj.writeHttpMetadata(headers);
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/webp');
+    const resp = new Response(obj.body, { headers });
+    if (ctx) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+    return resp;
+  }
+
+  // No captured preview yet — serve the animated SVG so marketplace grids at
+  // least show something living until the first /embed visitor seeds R2.
+  const svg = previewSvg(tokenId);
+  const resp = new Response(svg, {
     headers: {
       'Content-Type':                'image/svg+xml; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
-      // SVG content is deterministic per tokenId — cache for a day to cut
-      // worker invocations to a trickle. If we change the visuals we'll
-      // either DELETE the relevant cache entries or wait out the TTL.
-      'Cache-Control':               'public, max-age=86400',
+      // Shorter than the WebP path: we WANT marketplaces to re-fetch fast
+      // once a real capture lands.
+      'Cache-Control':               'public, max-age=300',
+      'X-Edge-Cache':                'MISS',
     },
   });
+  if (ctx) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+  return resp;
+}
+
+// =====================================================================
+// PREVIEW CAPTURE — animated WebP loops captured client-side from the live
+// sphere and stored in R2. The frontend in /embed/<addr> waits for the
+// sphere to settle, grabs ~5s of frames at 12 fps, encodes via the webpxmux
+// wasm muxer, and uploads here. The upload is fire-and-forget; OpenSea
+// auto-refreshes metadata on transfer, and our metadata image URL points at
+// /api/preview/<tokenId> which transparently returns the captured WebP once
+// it's available (or the animated SVG fallback before then).
+//
+// Storage key: preview/<addr_lower>.webp
+//
+// V1 is unauthenticated like atlas. Size + MIME validated; SIWE-gated PUT
+// is the eventual hardening.
+const PREVIEW_WEBP_MAX = 8 * 1024 * 1024;     // 8 MiB ceiling — real captures are ~300 KiB-1.5 MiB
+const PREVIEW_WEBP_MIN = 1024;                // must be at least 1 KiB to weed out empty PUTs
+
+async function handlePreviewCap(addr, request, env, ctx) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    return errorResponse(400, 'invalid address', request);
+  }
+  const key = `preview/${addr.toLowerCase()}.webp`;
+
+  if (request.method === 'HEAD') {
+    // Lightweight existence check. Frontend uses this to skip re-captures
+    // when a fresh-enough WebP is already in R2.
+    const head = await env.ATLAS.head(key);
+    if (!head) return errorResponse(404, 'no preview cached', request);
+    return new Response(null, {
+      status: 200,
+      headers: {
+        ...corsHeaders(request),
+        'Content-Type':   'image/webp',
+        'Content-Length': String(head.size),
+      },
+    });
+  }
+
+  if (request.method === 'GET') {
+    const obj = await env.ATLAS.get(key);
+    if (!obj) return errorResponse(404, 'no preview cached', request);
+    const headers = new Headers({
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control':               'public, max-age=3600',
+    });
+    obj.writeHttpMetadata(headers);
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'image/webp');
+    return new Response(obj.body, { headers });
+  }
+
+  if (request.method === 'PUT') {
+    const ct = (request.headers.get('Content-Type') || '').toLowerCase();
+    if (!ct.startsWith('image/webp')) {
+      return errorResponse(415, 'expected image/webp', request);
+    }
+    const len = parseInt(request.headers.get('Content-Length') || '0', 10);
+    if (len > PREVIEW_WEBP_MAX) {
+      return errorResponse(413, `body too large (${len} > ${PREVIEW_WEBP_MAX})`, request);
+    }
+    const buf = await request.arrayBuffer();
+    if (buf.byteLength > PREVIEW_WEBP_MAX) return errorResponse(413, 'body too large', request);
+    if (buf.byteLength < PREVIEW_WEBP_MIN) return errorResponse(400, 'body too small', request);
+    // RIFF magic bytes for WebP: "RIFF" .... "WEBP"
+    const sig = new Uint8Array(buf, 0, 12);
+    const isWebP = sig[0] === 0x52 && sig[1] === 0x49 && sig[2] === 0x46 && sig[3] === 0x46  // RIFF
+                && sig[8] === 0x57 && sig[9] === 0x45 && sig[10] === 0x42 && sig[11] === 0x50; // WEBP
+    if (!isWebP) return errorResponse(400, 'not a WebP file', request);
+
+    await env.ATLAS.put(key, buf, {
+      httpMetadata: { contentType: 'image/webp' },
+    });
+    // We don't surgically purge edge cache for /api/preview/<tokenId>
+    // entries (no reverse owner→tokens index). The SVG fallback's
+    // max-age=300 keeps the staleness window under 5 minutes for fresh
+    // captures, which is plenty for marketplace UX.
+    return jsonResponse({ ok: true, bytes: buf.byteLength }, request);
+  }
+
+  if (request.method === 'DELETE') {
+    await env.ATLAS.delete(key).catch(() => {});
+    return jsonResponse({ ok: true }, request);
+  }
+
+  return errorResponse(405, 'method not allowed', request);
 }
 
 async function handleMetadata(rawTokenId, request, env) {
@@ -333,7 +461,10 @@ async function handleMetadata(rawTokenId, request, env) {
   return metadataResponse({
     name:          `dustopia #${tokenId}`,
     description:   "Living wallet portrait -- every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder's collection.",
-    image:         `https://api.dustopia.xyz/api/preview/${tokenId}.svg`,
+    // Preview URL is extension-hinted to .webp so marketplaces prefer the
+    // animated WebP path; Worker still serves animated SVG transparently
+    // from the same URL when no capture is in R2 yet.
+    image:         `https://api.dustopia.xyz/api/preview/${tokenId}.webp`,
     animation_url: animUrl,
     external_url:  externalUrl,
     attributes:    [
@@ -564,12 +695,25 @@ export default {
       return handleMetadata(metaMatch[1], request, env);
     }
 
-    // Preview image (SVG placeholder; eventually animated WebP from R2).
-    // Same exemption from rate limit as /api/metadata: this is hit by
-    // marketplace bots, must stay available, and the upstream cost is zero.
+    // Preview image — animated WebP captured by visitors when available,
+    // animated SVG fallback otherwise. Hit by marketplace bots; exempt from
+    // per-IP rate limit and the global GET-only check has been deferred
+    // below so we can still 405 non-GET on this path consistently.
     const previewMatch = path.match(/^\/api\/preview\/([^/]+)\/?$/);
     if (previewMatch) {
-      return handlePreview(previewMatch[1], request);
+      if (request.method !== 'GET') return errorResponse(405, 'method not allowed', request);
+      return handlePreview(previewMatch[1], request, env, ctx);
+    }
+
+    // Preview capture upload/serve. PUT from /embed/<addr> after the sphere
+    // is captured; HEAD from /embed/<addr> to skip re-captures; GET for
+    // direct testing. Rate-limited because this is an upload path.
+    const previewCapMatch = path.match(/^\/api\/preview-cap\/([^/]+)\/?$/);
+    if (previewCapMatch) {
+      if (!(await rateLimitOk(request, env))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      return handlePreviewCap(previewCapMatch[1], request, env, ctx);
     }
 
     if (!(await rateLimitOk(request, env))) {
