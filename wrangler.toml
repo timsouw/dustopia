@@ -24,6 +24,7 @@ routes = [
 
 # Match the dashboard defaults so `wrangler deploy` doesn't drift back to
 # legacy values on every run.
+workers_dev = true   # keep the *.workers.dev URL as a backup access path
 preview_urls = true
 
 [observability]
