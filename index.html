@@ -106,6 +106,35 @@
   body.embed #fps,
   body.embed #hint,
   body.embed #err { display: none !important; }
+
+  /* Cold-start progress UI for embed mode. The full #loadPanel is hidden
+     in OpenSea iframes etc., but visitors still need feedback during the
+     ~30s atlas build on a fresh wallet. This is a tiny centered overlay
+     that mirrors setStatus/setProgress and disappears the moment the
+     sphere starts rendering. */
+  #embedStatus {
+    position:fixed; inset:0;
+    display:none; align-items:center; justify-content:center;
+    flex-direction:column; gap:14px;
+    pointer-events:none; user-select:none;
+    font-size:12px; color:#8a8a95; letter-spacing:.04em;
+    z-index: 60;
+  }
+  #embedStatus .text { min-height:16px; }
+  #embedStatus .bar {
+    width:200px; height:2px;
+    background:rgba(255,255,255,.08); border-radius:1px;
+    overflow:hidden; opacity:0; transition:opacity 200ms;
+  }
+  #embedStatus .bar.active { opacity:1; }
+  #embedStatus .bar > div {
+    height:100%; background:rgba(231,231,234,.5);
+    width:0%; transition:width 100ms linear;
+  }
+  body.light #embedStatus { color:#71717a; }
+  body.light #embedStatus .bar { background:rgba(0,0,0,.08); }
+  body.light #embedStatus .bar > div { background:rgba(24,24,27,.5); }
+  body.embed #embedStatus { display:flex; }
 </style>
 </head>
 <body class="light">
@@ -179,6 +208,7 @@
 </div>
 
 <div id="fps"></div>
+<div id="embedStatus"><div class="text"></div><div class="bar"><div></div></div></div>
 
 <script>
 // ====================================================================
@@ -292,7 +322,13 @@ const FETCH_TIMEOUT= 12000;
 const MAX_TOKENS   = 1024;           // safety ceiling for live render perf
 
 const statusEl = () => document.getElementById('status');
-function setStatus(html) { const el = statusEl(); if (el) el.innerHTML = html; }
+function setStatus(html) {
+  const el = statusEl(); if (el) el.innerHTML = html;
+  // Mirror into the embed-mode overlay so OpenSea / wallet-iframe visitors
+  // get build feedback even with the full #loadPanel hidden.
+  const e2 = document.querySelector('#embedStatus .text');
+  if (e2) e2.innerHTML = html;
+}
 // HTML-escape for any value derived from user input or external data that we
 // interpolate into setStatus / showError. Defense-in-depth: existing regex
 // validators already block XSS chars, but escaping survives future refactors.
@@ -471,11 +507,67 @@ function buildAtlasBinary(pairs) {
 }
 
 function setProgress(pct, active) {
-  const wrap = document.getElementById('progress');
-  if (!wrap) return;
-  const bar = wrap.firstElementChild;
-  if (active) wrap.classList.add('active'); else wrap.classList.remove('active');
-  if (bar) bar.style.width = (pct * 100).toFixed(1) + '%';
+  for (const sel of ['#progress', '#embedStatus .bar']) {
+    const wrap = document.querySelector(sel);
+    if (!wrap) continue;
+    const bar = wrap.firstElementChild;
+    if (active) wrap.classList.add('active'); else wrap.classList.remove('active');
+    if (bar) bar.style.width = (pct * 100).toFixed(1) + '%';
+  }
+}
+
+// =====================================================================
+// R2 ATLAS CACHE (server-side) — try to skip the entire image-fetch +
+// canvas-build pipeline by downloading a pre-built atlas binary from our
+// Worker. Cache key is (addr, GRID); content is deterministic until the
+// holdings change (manual DELETE today, Alchemy webhook eventually).
+// =====================================================================
+
+// Returns { meta, binBuf } if cache hit, null on miss / any error.
+// "Any error" includes server 5xx, malformed payload, or a binary whose
+// length doesn't match meta.count · GRID² · 3 (stale cache after a GRID
+// constant change). On null we fall through to a fresh local build.
+async function tryFetchCachedAtlas(addr) {
+  if (!API_URL) return null;
+  const base = `${API_URL}/api/atlas/${addr}?grid=${GRID}`;
+  let metaRes, binRes;
+  try {
+    metaRes = await fetch(base + '&meta=1');
+    if (metaRes.status === 404) return null;
+    if (!metaRes.ok) return null;
+    binRes = await fetch(base);
+    if (!binRes.ok) return null;
+  } catch { return null; }
+  let meta;
+  try { meta = await metaRes.json(); } catch { return null; }
+  const binBuf = await binRes.arrayBuffer();
+  const expected = meta.count * GRID * GRID * 3;
+  if (binBuf.byteLength !== expected) return null;
+  return { meta, binBuf };
+}
+
+// Fire-and-forget upload of a freshly-built atlas. Binary first (the
+// expensive payload), then meta — meta is the "ready" sentinel a future
+// reader checks first, so this ordering guarantees no half-cached state.
+// Errors are swallowed: a failed upload just means the next visitor pays
+// the build cost again, no user-visible damage.
+async function uploadAtlas(addr, meta, binBuf) {
+  if (!API_URL) return;
+  const base = `${API_URL}/api/atlas/${addr}?grid=${GRID}`;
+  try {
+    const r1 = await fetch(base, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body:    binBuf,
+    });
+    if (!r1.ok) { console.warn('atlas bin upload', r1.status); return; }
+    const r2 = await fetch(base + '&meta=1', {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(meta),
+    });
+    if (!r2.ok) console.warn('atlas meta upload', r2.status);
+  } catch (e) { console.warn('atlas upload err', e); }
 }
 
 async function buildLiveData(input) {
@@ -494,6 +586,28 @@ async function buildLiveData(input) {
     throw new Error('not a valid ENS (.eth) or 0x address');
   }
   const short = `${addr.slice(0,6)}…${addr.slice(-4)}`;
+
+  // ── Server cache check ──────────────────────────────────────────
+  // Skip the image-fetch + canvas-build steps entirely if we have a
+  // pre-built atlas in R2 for this (addr, GRID). Repeat visits to a
+  // wallet's sphere — including every OpenSea iframe load — become
+  // a single binary download.
+  setStatus(`<span>checking cache for ${short}…</span>`);
+  const cached = await tryFetchCachedAtlas(addr);
+  if (cached) {
+    setStatus(`<span class="ok">✓ cached atlas (${cached.meta.count} tokens)</span>`);
+    return {
+      meta:           cached.meta,
+      binBuf:         cached.binBuf,
+      walletAddr:     addr,
+      originalInput:  original,
+      isEns,
+      failed:         0,
+      totalRequested: cached.meta.count,
+      fromCache:      true,
+    };
+  }
+
   setStatus(`<span>fetching NFTs for ${short}…</span>`);
   const nfts = await fetchAllNFTsLive(addr, (cnt, total) => {
     setStatus(`<span>fetching NFTs · ${cnt}${total ? ' / ~' + total : ''}</span>`);
@@ -530,7 +644,12 @@ async function buildLiveData(input) {
   const failed = used.length - pairs.length;
   setStatus(`<span>building atlas (${pairs.length} tokens)…</span>`);
   const { meta, binBuf } = buildAtlasBinary(pairs);
-  return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length };
+  // Fire-and-forget: persist this atlas to R2 so the next visit (or every
+  // OpenSea iframe load on this NFT) hits the cache path above. Awaited
+  // upload would block first paint by ~5-30s for large wallets — not worth
+  // it. Failures are logged and otherwise ignored.
+  uploadAtlas(addr, meta, binBuf);
+  return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false };
 }
 
 function waitForLoadAndBuild() {
@@ -584,6 +703,12 @@ async function main() {
   // Update page title + URL hash so the wallet is shareable.
   document.title = `${displayName} · dustopia`;
   history.replaceState(null, '', '#' + (built.isEns ? built.originalInput : built.walletAddr));
+
+  // Hide the embed-mode build overlay now that the sphere is about to paint.
+  // (The full #loadPanel is already CSS-hidden in embed mode; this only
+  // affects the centered "fetching… / building…" status used in iframes.)
+  const eStat = document.getElementById('embedStatus');
+  if (eStat) eStat.style.display = 'none';
 
   // Collapse the load panel into a small pill that stays clickable.
   // The h1 inside displays the loaded wallet's ENS or short 0x address.

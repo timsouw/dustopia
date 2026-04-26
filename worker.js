@@ -32,7 +32,7 @@ function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin':  allowed ? (origin || '*') : 'null',
     'Vary':                         'Origin',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age':       '86400',
   };
@@ -298,18 +298,155 @@ async function handleMetadata(rawTokenId, request, env) {
   }, request);
 }
 
+// =====================================================================
+// ATLAS CACHE — persistent R2 storage of pre-built atlases (binary RGB pixel
+// data + JSON meta). The frontend builds the atlas client-side (fetching all
+// NFT thumbnails, drawing them into a canvas, dumping RGB tiles into a
+// Uint8Array). That work takes 10–60s on a cold wallet — and once done, the
+// result is deterministic for that (wallet, GRID) pair until the holdings
+// change. We cache it forever and serve it from R2 on every subsequent visit.
+//
+// Invalidation is manual today: DELETE /api/atlas/<addr> blows away both grids
+// and forces a rebuild on next load. A future Alchemy webhook on Transfer
+// events will call DELETE automatically when an NFT moves in/out of a wallet.
+//
+// Keys:
+//   <addr_lower>/<grid>.bin   raw RGB8 (N · grid² · 3 bytes)
+//   <addr_lower>/<grid>.json  meta { count, lods, offsets, tokens, ... }
+//
+// V1 is unauthenticated: anyone can PUT for any address. The size cap and
+// MIME validation prevent random garbage from blowing up the bucket. Under
+// adversarial load we'd add a SIWE signature requirement here.
+const ATLAS_GRIDS_OK = new Set([128, 192]);
+const ATLAS_TOKEN_LIMIT = 1024;        // mirror MAX_TOKENS in index.html
+const ATLAS_META_MAX = 256 * 1024;     // 256 KiB ceiling for the JSON meta
+const ATLAS_BIN_MAX  = ATLAS_TOKEN_LIMIT * 192 * 192 * 3 + 1024;
+const ATLAS_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
+function atlasKey(addr, grid, kind) {
+  return `${addr.toLowerCase()}/${grid}.${kind}`;
+}
+
+function atlasResponse(body, request, init = {}) {
+  // Same wide-open CORS as metadata: this is hit by the live frontend AND by
+  // direct browser navigations (cache warmups), so * is fine. Long max-age
+  // because atlases are immutable per (addr, grid) until DELETE clears them.
+  return new Response(body, {
+    ...init,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control':               ATLAS_CACHE_CONTROL,
+      ...(init.headers || {}),
+    },
+  });
+}
+
+async function handleAtlasGet(addr, grid, wantMeta, request, env) {
+  const key = atlasKey(addr, grid, wantMeta ? 'json' : 'bin');
+  const obj = await env.ATLAS.get(key);
+  if (!obj) return errorResponse(404, 'atlas not cached', request);
+  const ct = wantMeta ? 'application/json; charset=utf-8' : 'application/octet-stream';
+  return atlasResponse(obj.body, request, { headers: { 'Content-Type': ct } });
+}
+
+async function handleAtlasPut(addr, grid, wantMeta, request, env) {
+  const ct = (request.headers.get('Content-Type') || '').toLowerCase();
+  const expectedCt = wantMeta ? 'application/json' : 'application/octet-stream';
+  if (!ct.startsWith(expectedCt)) {
+    return errorResponse(415, `expected ${expectedCt}`, request);
+  }
+  const max = wantMeta ? ATLAS_META_MAX : ATLAS_BIN_MAX;
+  const len = parseInt(request.headers.get('Content-Length') || '0', 10);
+  if (len > max) return errorResponse(413, `body too large (${len} > ${max})`, request);
+
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength > max) return errorResponse(413, 'body too large', request);
+  if (!buf.byteLength) return errorResponse(400, 'empty body', request);
+
+  // Binary sanity check: must be exactly N · grid² · 3 bytes for some N ≤ 1024.
+  if (!wantMeta) {
+    const tile = grid * grid * 3;
+    if (buf.byteLength % tile !== 0) {
+      return errorResponse(400, `binary not aligned to grid² · 3 (${tile} bytes)`, request);
+    }
+    const n = buf.byteLength / tile;
+    if (n < 1 || n > ATLAS_TOKEN_LIMIT) {
+      return errorResponse(400, `token count ${n} out of range [1, ${ATLAS_TOKEN_LIMIT}]`, request);
+    }
+  } else {
+    // Meta: must be valid JSON with the expected shape. Reject anything else
+    // before it lands in the bucket.
+    let meta;
+    try { meta = JSON.parse(new TextDecoder().decode(buf)); }
+    catch { return errorResponse(400, 'meta is not valid JSON', request); }
+    if (!meta || typeof meta.count !== 'number' || !Array.isArray(meta.lods) || !Array.isArray(meta.tokens)) {
+      return errorResponse(400, 'meta missing required fields', request);
+    }
+    if (meta.count > ATLAS_TOKEN_LIMIT || meta.tokens.length !== meta.count) {
+      return errorResponse(400, 'meta.count inconsistent', request);
+    }
+  }
+
+  await env.ATLAS.put(atlasKey(addr, grid, wantMeta ? 'json' : 'bin'), buf, {
+    httpMetadata: { contentType: wantMeta ? 'application/json; charset=utf-8' : 'application/octet-stream' },
+  });
+  return jsonResponse({ ok: true, bytes: buf.byteLength }, request);
+}
+
+async function handleAtlasDelete(addr, request, env) {
+  // Wipe both grids in both kinds. Cheap because R2 deletes are individual
+  // ops; only 4 keys per address. Idempotent — missing keys are no-ops.
+  const keys = [];
+  for (const grid of ATLAS_GRIDS_OK) {
+    keys.push(atlasKey(addr, grid, 'bin'));
+    keys.push(atlasKey(addr, grid, 'json'));
+  }
+  await Promise.all(keys.map(k => env.ATLAS.delete(k).catch(() => {})));
+  return jsonResponse({ ok: true, deleted: keys.length }, request);
+}
+
+async function handleAtlas(addr, request, env) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    return errorResponse(400, 'invalid address', request);
+  }
+  if (request.method === 'DELETE') {
+    return handleAtlasDelete(addr, request, env);
+  }
+  const url = new URL(request.url);
+  const grid = parseInt(url.searchParams.get('grid') || '0', 10);
+  if (!ATLAS_GRIDS_OK.has(grid)) {
+    return errorResponse(400, `grid must be one of ${[...ATLAS_GRIDS_OK].join(',')}`, request);
+  }
+  const wantMeta = url.searchParams.get('meta') === '1';
+  if (request.method === 'GET') return handleAtlasGet(addr, grid, wantMeta, request, env);
+  if (request.method === 'PUT') return handleAtlasPut(addr, grid, wantMeta, request, env);
+  return errorResponse(405, 'method not allowed', request);
+}
+
 export default {
   async fetch(request, env) {
     // CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
-    if (request.method !== 'GET') {
-      return errorResponse(405, 'method not allowed', request);
-    }
 
     const url = new URL(request.url);
     const path = url.pathname;
+
+    // Atlas cache: GET (any browser), PUT (frontend after build), DELETE
+    // (refresh button / future Alchemy webhook). Routed before the global
+    // method check below because it accepts non-GET methods.
+    const atlasMatch = path.match(/^\/api\/atlas\/([^/]+)\/?$/);
+    if (atlasMatch) {
+      if (!(await rateLimitOk(request, env))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      return handleAtlas(atlasMatch[1], request, env);
+    }
+
+    if (request.method !== 'GET') {
+      return errorResponse(405, 'method not allowed', request);
+    }
 
     // Health is exempt from rate limiting so monitoring stays cheap.
     if (path === '/api/health') {
