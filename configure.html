@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>configure / dustopia</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; min-height:100vh;
+    background:#14141a; color:#e7e7ea;
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  }
+  body.light { background:#f4f4f5; color:#18181b; }
+  a { color:inherit; text-decoration:none; }
+
+  /* ── Header ─────────────────────────────────────────────────── */
+  header {
+    position:sticky; top:0; z-index:50;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 22px;
+    background:rgba(20,20,26,.78); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  body.light header { background:rgba(244,244,245,.86); border-color:rgba(0,0,0,.08); }
+  .brand { font-size:13px; letter-spacing:.04em; }
+  .brand strong { font-weight:600; }
+  .brand .sep { opacity:.4; margin:0 8px; }
+  .brand .crumb { color:#9a9aa5; }
+  body.light .brand .crumb { color:#71717a; }
+
+  .head-actions { display:flex; gap:8px; align-items:center; }
+  .btn {
+    background:transparent; border:1px solid rgba(255,255,255,.18); color:#e7e7ea;
+    font-family:inherit; font-size:11px; letter-spacing:.04em;
+    padding:6px 12px; border-radius:6px; cursor:pointer;
+    transition:border-color 120ms, color 120ms;
+  }
+  .btn:hover  { border-color:#e7e7ea; color:#fff; }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .btn-primary { background:#e7e7ea; color:#101217; border-color:#e7e7ea; font-weight:600; }
+  .btn-primary:hover { background:#fff; color:#101217; }
+  body.light .btn { color:#18181b; border-color:rgba(0,0,0,.18); }
+  body.light .btn:hover { color:#000; border-color:#000; }
+  body.light .btn-primary { background:#18181b; color:#fafafa; border-color:#18181b; }
+  body.light .btn-primary:hover { background:#000; color:#fafafa; }
+
+  .wallet-pill {
+    display:flex; align-items:center; gap:6px;
+    padding:5px 10px; border-radius:6px;
+    background:rgba(255,255,255,.06);
+    font-family:"SF Mono","Menlo",monospace; font-size:11px;
+  }
+  body.light .wallet-pill { background:rgba(0,0,0,.06); }
+  .wallet-pill .dot { width:6px; height:6px; border-radius:50%; background:#9fe8c0; }
+  body.light .wallet-pill .dot { background:#047857; }
+  .wallet-pill .name { color:#9a9aa5; font-size:10px; letter-spacing:.04em; }
+  body.light .wallet-pill .name { color:#71717a; }
+
+  /* ── Main / states ──────────────────────────────────────────── */
+  main { max-width:1180px; margin:0 auto; padding:32px 22px 80px; }
+  .hint { color:#9a9aa5; font-size:12px; line-height:1.6; }
+  body.light .hint { color:#71717a; }
+
+  /* Disconnected state */
+  .empty-state {
+    text-align:center; padding:80px 20px;
+  }
+  .empty-state h2 { font-size:22px; font-weight:500; margin-bottom:14px; letter-spacing:-0.01em; }
+  .empty-state p { color:#9a9aa5; font-size:13px; line-height:1.7; margin-bottom:26px; max-width:440px; margin-left:auto; margin-right:auto; }
+  body.light .empty-state p { color:#71717a; }
+
+  .wallet-list {
+    display:flex; flex-direction:column; gap:8px;
+    max-width:340px; margin:0 auto;
+  }
+  .wallet-option {
+    display:flex; align-items:center; gap:12px;
+    padding:14px 16px;
+    background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.10);
+    border-radius:10px; cursor:pointer;
+    transition:border-color 120ms, background 120ms;
+    text-align:left;
+    color:inherit; font:inherit;
+  }
+  .wallet-option:hover { border-color:rgba(255,255,255,.4); background:rgba(255,255,255,.07); }
+  body.light .wallet-option { background:rgba(0,0,0,.03); border-color:rgba(0,0,0,.10); }
+  body.light .wallet-option:hover { border-color:rgba(0,0,0,.4); background:rgba(0,0,0,.06); }
+  .wallet-option img { width:24px; height:24px; border-radius:6px; }
+  .wallet-option .label { flex:1; font-size:13px; font-weight:500; }
+  .wallet-option .arrow { color:#9a9aa5; font-size:14px; }
+
+  /* Token list (after connect) */
+  .section-title { font-size:13px; letter-spacing:.04em; color:#9a9aa5; text-transform:uppercase; margin-bottom:14px; }
+  body.light .section-title { color:#71717a; }
+  .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+  .token-card {
+    background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08);
+    border-radius:12px; padding:18px; cursor:pointer;
+    transition:border-color 120ms, transform 120ms;
+    color:inherit; font:inherit; text-align:left;
+  }
+  .token-card:hover { border-color:rgba(255,255,255,.32); transform:translateY(-1px); }
+  body.light .token-card { background:#fff; border-color:rgba(0,0,0,.08); }
+  body.light .token-card:hover { border-color:rgba(0,0,0,.4); }
+  .token-card .id { font-size:18px; font-weight:600; margin-bottom:4px; }
+  .token-card .sub { font-size:11px; color:#9a9aa5; }
+  body.light .token-card .sub { color:#71717a; }
+  .token-card .row { display:flex; justify-content:space-between; align-items:flex-end; margin-top:18px; }
+  .token-card .edit-link { font-size:11px; color:#cfd1d7; }
+  body.light .token-card .edit-link { color:#27272a; }
+
+  /* Loading / error overlays */
+  .status-line { padding:14px 18px; font-size:12px; color:#9a9aa5; text-align:center; }
+  body.light .status-line { color:#71717a; }
+  .status-line.err { color:#ff7e7e; }
+  body.light .status-line.err { color:#b91c1c; }
+
+  /* Editor split layout — placeholder, populated by PR C */
+  #editorRoot { display:none; }
+  #editorRoot.active { display:grid; grid-template-columns:minmax(320px, 1fr) minmax(320px, 420px); gap:20px; align-items:start; }
+  @media (max-width: 800px) {
+    #editorRoot.active { grid-template-columns:1fr; }
+  }
+
+  /* Hidden helper */
+  .hidden { display:none !important; }
+</style>
+</head>
+<body class="light">
+
+<header>
+  <div class="brand">
+    <a href="/"><strong>dustopia</strong></a>
+    <span class="sep">/</span>
+    <span class="crumb" id="crumb">configure</span>
+  </div>
+  <div class="head-actions">
+    <button id="themeBtn" class="btn" title="toggle theme">☾ Dark</button>
+    <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
+    <div id="walletPill" class="wallet-pill hidden">
+      <span class="dot"></span>
+      <span class="name" id="walletProviderName"></span>
+      <span id="addrShort">0x…</span>
+      <button id="disconnectBtn" class="btn" style="padding:2px 8px; font-size:10px;">×</button>
+    </div>
+  </div>
+</header>
+
+<main id="app">
+  <!-- views are rendered here by the JS router -->
+</main>
+
+<script>
+  // ───────────────────────────────────────────────────────────────
+  // SAFE STORAGE — sandboxed contexts (rare for /configure but
+  // belt-and-braces) sometimes throw on localStorage access.
+  // Mirrors the helper in index.html.
+  // ───────────────────────────────────────────────────────────────
+  window.safeStorage = (function() {
+    let mem = {};
+    try {
+      const k = '__t';
+      localStorage.setItem(k, k); localStorage.removeItem(k);
+      return {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+        del: (k) => { try { localStorage.removeItem(k); } catch { delete mem[k]; } },
+      };
+    } catch {
+      return {
+        get: (k) => mem[k] ?? null,
+        set: (k, v) => { mem[k] = v; },
+        del: (k) => { delete mem[k]; },
+      };
+    }
+  })();
+
+  // Apply persisted theme BEFORE first paint. Default = light.
+  (function() {
+    const saved = safeStorage.get('franken-theme');
+    if (saved === 'dark') document.body.classList.remove('light');
+    else                  document.body.classList.add('light');
+  })();
+</script>
+<script>
+// ════════════════════════════════════════════════════════════════
+// configure.html — owner-gated editor for Dustopia tokens
+//
+// Routes:
+//   /configure          → list of dustopia tokens owned by the
+//                          connected wallet (click → /configure/<id>)
+//   /configure/<id>     → editor for that specific token
+//
+// State machine (drives view in <main id="app">):
+//   disconnected      → wallet picker
+//   connected:list    → owned-tokens grid
+//   connected:editor  → split layout (preview iframe + selection)
+//
+// Auth model: nothing here is privileged on its own. Reads (/api/owned,
+// /api/wallet, /api/config GET) are public. Save (/api/config PUT) is
+// owner-gated server-side via personal_sign over a SIWE-style message;
+// the Worker verifies signer == ownerOf(tokenId) live before writing.
+// ════════════════════════════════════════════════════════════════
+
+// Same backend as the main site — no second deploy target.
+const API_URL = 'https://api.dustopia.xyz';
+
+// Module-level state.
+const state = {
+  view: 'disconnected',          // 'disconnected' | 'list' | 'editor'
+  providers: [],                 // EIP-6963 announcements
+  activeProvider: null,          // chosen wallet's EIP-1193 provider
+  activeProviderInfo: null,      // { name, icon, rdns }
+  address: null,                 // 0x... lowercase
+  ownedTokenIds: [],             // strings, decimal
+  tokenId: null,                 // current /configure/<id> token
+};
+
+// ── Utilities ──────────────────────────────────────────────────
+function $(sel)        { return document.querySelector(sel); }
+function setText(sel, text) { const el = $(sel); if (el) el.textContent = text; }
+function show(sel)     { const el = $(sel); if (el) el.classList.remove('hidden'); }
+function hide(sel)     { const el = $(sel); if (el) el.classList.add('hidden'); }
+function shortAddr(a)  { return a ? `${a.slice(0,6)}…${a.slice(-4)}` : ''; }
+function esc(s)        {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+// ── Theme toggle (mirrors main site) ───────────────────────────
+$('#themeBtn').addEventListener('click', () => {
+  const isLight = document.body.classList.toggle('light');
+  safeStorage.set('franken-theme', isLight ? 'light' : 'dark');
+  $('#themeBtn').textContent = isLight ? '☾ Dark' : '☀ Light';
+});
+$('#themeBtn').textContent = document.body.classList.contains('light') ? '☾ Dark' : '☀ Light';
+
+// ── Routing ───────────────────────────────────────────────────
+// Path-based: /configure → list, /configure/<id> → editor.
+// Cloudflare Pages serves configure.html for both via _redirects.
+function parseRoute() {
+  const m = location.pathname.match(/^\/configure\/(\d{1,78})\/?$/);
+  return m ? { kind: 'editor', tokenId: m[1] } : { kind: 'list' };
+}
+function go(path) {
+  history.pushState(null, '', path);
+  render();
+}
+window.addEventListener('popstate', render);
+
+// ── Top-level render dispatcher ───────────────────────────────
+function render() {
+  const route = parseRoute();
+  state.tokenId = route.kind === 'editor' ? route.tokenId : null;
+  setText('#crumb', route.kind === 'editor' ? `configure / #${route.tokenId}` : 'configure');
+
+  if (!state.address) {
+    state.view = 'disconnected';
+    renderDisconnected();
+    return;
+  }
+  if (route.kind === 'list') {
+    state.view = 'list';
+    renderTokenList();
+    return;
+  }
+  state.view = 'editor';
+  renderEditor();
+}
+
+// ── Render: disconnected ─────────────────────────────────────
+function renderDisconnected() {
+  const main = $('#app');
+  const wallets = state.providers.length
+    ? state.providers.map((p, i) => `
+        <button class="wallet-option" data-i="${i}">
+          ${p.info.icon ? `<img src="${esc(p.info.icon)}" alt="">` : '<span style="width:24px"></span>'}
+          <span class="label">${esc(p.info.name)}</span>
+          <span class="arrow">→</span>
+        </button>`).join('')
+    : `<p class="hint">No wallets detected. Install <a href="https://metamask.io" target="_blank" style="color:inherit;text-decoration:underline">MetaMask</a>, <a href="https://rabby.io" target="_blank" style="color:inherit;text-decoration:underline">Rabby</a>, or <a href="https://www.coinbase.com/wallet" target="_blank" style="color:inherit;text-decoration:underline">Coinbase Wallet</a> and reload this page.</p>`;
+  main.innerHTML = `
+    <div class="empty-state">
+      <h2>Configure your dustopia</h2>
+      <p>Connect the wallet that owns the token to pick which NFTs go into the sphere. Your selection is signed locally and saved to the on-chain artwork.</p>
+      <div class="wallet-list">${wallets}</div>
+    </div>`;
+  main.querySelectorAll('.wallet-option').forEach(btn => {
+    btn.addEventListener('click', () => connectWallet(parseInt(btn.dataset.i, 10)));
+  });
+}
+
+// ── Render: token list (after connect) ───────────────────────
+function renderTokenList() {
+  const main = $('#app');
+  if (!state.ownedTokenIds.length) {
+    main.innerHTML = `
+      <div class="empty-state">
+        <h2>No dustopia tokens in this wallet</h2>
+        <p>Connect a different wallet, or mint a token first via the OpenSea drop page.</p>
+      </div>`;
+    return;
+  }
+  main.innerHTML = `
+    <div class="section-title">Your dustopia tokens (${state.ownedTokenIds.length})</div>
+    <div class="token-grid" id="tokenGrid"></div>`;
+  const grid = $('#tokenGrid');
+  for (const id of state.ownedTokenIds) {
+    const card = document.createElement('button');
+    card.className = 'token-card';
+    card.innerHTML = `
+      <div class="id">Dustopia #${esc(id)}</div>
+      <div class="sub">tap to edit selection</div>
+      <div class="row">
+        <span class="sub" id="cfg-${esc(id)}">…</span>
+        <span class="edit-link">Edit →</span>
+      </div>`;
+    card.addEventListener('click', () => go(`/configure/${id}`));
+    grid.appendChild(card);
+    // Lazy fetch of saved-config summary per card.
+    fetch(`${API_URL}/api/config/${id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(cfg => {
+        if (!cfg) return;
+        const sel = cfg.selection || { mode: 'all' };
+        const span = document.getElementById(`cfg-${id}`);
+        if (!span) return;
+        if (sel.mode === 'all') {
+          span.textContent = 'all NFTs (default)';
+        } else {
+          const cols = (sel.collections || []).length;
+          const tks  = (sel.tokens || []).length;
+          span.textContent = `subset · ${cols} collections, ${tks} tokens`;
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+// ── Render: editor (PR C will fill in) ───────────────────────
+function renderEditor() {
+  const main = $('#app');
+  main.innerHTML = `
+    <div class="section-title">Editing Dustopia #${esc(state.tokenId)}</div>
+    <p class="status-line">Editor UI coming in the next PR. Wallet is connected as ${esc(shortAddr(state.address))}.</p>
+    <div style="text-align:center; margin-top:18px;">
+      <button class="btn" id="backBtn">← back to list</button>
+    </div>`;
+  $('#backBtn').addEventListener('click', () => go('/configure'));
+}
+
+// ── Wallet discovery (EIP-6963 + window.ethereum fallback) ───
+// EIP-6963 lets multiple wallets coexist on the same page without
+// fighting over window.ethereum. We dispatch the request, then any
+// installed wallet replies with announceProvider. Legacy wallets
+// without 6963 still expose window.ethereum and we fall back to it.
+function discoverWallets() {
+  state.providers = [];
+  const onAnnounce = (e) => {
+    if (e.detail && e.detail.provider && e.detail.info) {
+      state.providers.push({ info: e.detail.info, provider: e.detail.provider });
+    }
+  };
+  window.addEventListener('eip6963:announceProvider', onAnnounce);
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  return new Promise(resolve => {
+    setTimeout(() => {
+      window.removeEventListener('eip6963:announceProvider', onAnnounce);
+      // Legacy fallback: if nothing announced and window.ethereum exists,
+      // present it as a generic option. Modern wallets all support 6963 so
+      // this rarely fires.
+      if (!state.providers.length && window.ethereum) {
+        state.providers.push({
+          info: { name: 'Browser Wallet', icon: '', rdns: 'legacy' },
+          provider: window.ethereum,
+        });
+      }
+      resolve();
+    }, 250);
+  });
+}
+
+// ── Connect / disconnect ─────────────────────────────────────
+async function connectWallet(idx) {
+  const entry = state.providers[idx];
+  if (!entry) return;
+  try {
+    const accounts = await entry.provider.request({ method: 'eth_requestAccounts' });
+    const addr = (accounts && accounts[0] || '').toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(addr)) throw new Error('no account');
+    state.activeProvider     = entry.provider;
+    state.activeProviderInfo = entry.info;
+    state.address            = addr;
+    safeStorage.set('dustopia-wallet-rdns', entry.info.rdns || '');
+    safeStorage.set('dustopia-wallet-addr', addr);
+    showWalletPill();
+    await loadOwnedTokens();
+    render();
+  } catch (e) {
+    console.warn('connect failed', e);
+    alert(`Connect failed: ${e && e.message ? e.message : 'unknown'}`);
+  }
+}
+
+function disconnect() {
+  state.activeProvider     = null;
+  state.activeProviderInfo = null;
+  state.address            = null;
+  state.ownedTokenIds      = [];
+  safeStorage.del('dustopia-wallet-rdns');
+  safeStorage.del('dustopia-wallet-addr');
+  hide('#walletPill');
+  show('#connectBtn');
+  render();
+}
+$('#disconnectBtn').addEventListener('click', disconnect);
+$('#connectBtn').addEventListener('click', () => {
+  if (!state.providers.length) renderDisconnected();
+});
+
+function showWalletPill() {
+  hide('#connectBtn');
+  show('#walletPill');
+  setText('#walletProviderName', state.activeProviderInfo?.name || 'wallet');
+  setText('#addrShort', shortAddr(state.address));
+}
+
+// ── Reconnect on reload (silent) ─────────────────────────────
+async function tryReconnect() {
+  const savedAddr = safeStorage.get('dustopia-wallet-addr');
+  const savedRdns = safeStorage.get('dustopia-wallet-rdns');
+  if (!savedAddr || !savedRdns) return;
+  // Find the same wallet among announcements.
+  const entry = state.providers.find(p => p.info.rdns === savedRdns) || state.providers[0];
+  if (!entry) return;
+  try {
+    // eth_accounts (no prompt) returns already-permitted accounts.
+    const accounts = await entry.provider.request({ method: 'eth_accounts' });
+    const addr = (accounts && accounts[0] || '').toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(addr) || addr !== savedAddr.toLowerCase()) {
+      safeStorage.del('dustopia-wallet-rdns');
+      safeStorage.del('dustopia-wallet-addr');
+      return;
+    }
+    state.activeProvider     = entry.provider;
+    state.activeProviderInfo = entry.info;
+    state.address            = addr;
+    showWalletPill();
+    await loadOwnedTokens();
+  } catch {/* ignore — user can manually re-connect */}
+}
+
+// ── Owned tokens fetch ───────────────────────────────────────
+async function loadOwnedTokens() {
+  if (!state.address) return;
+  try {
+    const r = await fetch(`${API_URL}/api/owned/${state.address}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    state.ownedTokenIds = Array.isArray(j.tokenIds) ? j.tokenIds : [];
+  } catch (e) {
+    console.warn('owned fetch failed', e);
+    state.ownedTokenIds = [];
+  }
+}
+
+// ── Boot ─────────────────────────────────────────────────────
+(async function main() {
+  await discoverWallets();
+  await tryReconnect();
+  render();
+})();
+</script>
+</body>
+</html>
