@@ -38,3 +38,12 @@ enabled = true
 [[kv_namespaces]]
 binding = "WALLET_CACHE"
 id      = "043aff23e1894533b81aaab958718377"
+
+# R2 binding — persistent atlas cache. Atlases are deterministic per
+# (wallet, GRID), so once built we store them forever and serve them on
+# every subsequent visit. Manual invalidation only (DELETE endpoint, future
+# Alchemy webhook on transfer). Bucket created via dashboard; public access
+# is OFF — all reads/writes go through the Worker.
+[[r2_buckets]]
+binding     = "ATLAS"
+bucket_name = "dustopia-atlas"
