@@ -109,32 +109,34 @@
 
   /* Cold-start progress UI for embed mode. The full #loadPanel is hidden
      in OpenSea iframes, but visitors still need feedback during the ~30s
-     cold build. We render the word "loading" twice on top of itself: a
-     dim base layer and a bright "fill" layer clipped to the current
-     progress fraction, so the text appears to fill in from left to right
-     as the build advances. Hidden again the moment the sphere paints. */
+     cold build. Classic centered "loading" + three pulsing dots. The
+     dots breathe in/out with staggered delays so the indicator looks
+     alive even though our actual progress fraction is hidden. */
   #embedLoader {
     position:fixed; inset:0;
     display:none; align-items:center; justify-content:center;
     pointer-events:none; user-select:none;
     z-index:60;
   }
-  #embedLoader .wrap {
-    position:relative;
-    font-size:13px; letter-spacing:.22em; text-transform:lowercase;
+  #embedLoader .text {
     font-family:inherit;
-  }
-  #embedLoader .base { color:#3a3a44; }
-  #embedLoader .fill {
-    position:absolute; left:0; top:0;
+    font-size:26px;
+    letter-spacing:.18em;
+    text-transform:lowercase;
     color:#e7e7ea;
-    overflow:hidden;
-    width:0%;
-    transition:width 220ms linear;
-    white-space:nowrap;
   }
-  body.light #embedLoader .base { color:#c4c4c8; }
-  body.light #embedLoader .fill { color:#18181b; }
+  #embedLoader .dots span {
+    display:inline-block;
+    animation:dustopia-dot 1.4s ease-in-out infinite;
+  }
+  #embedLoader .dots span:nth-child(1) { animation-delay: 0.00s; }
+  #embedLoader .dots span:nth-child(2) { animation-delay: 0.20s; }
+  #embedLoader .dots span:nth-child(3) { animation-delay: 0.40s; }
+  @keyframes dustopia-dot {
+    0%, 80%, 100% { opacity: 0.18; }
+    40%           { opacity: 1; }
+  }
+  body.light #embedLoader .text { color:#18181b; }
   body.embed #embedLoader { display:flex; }
 </style>
 </head>
@@ -209,7 +211,7 @@
 </div>
 
 <div id="fps"></div>
-<div id="embedLoader"><div class="wrap"><span class="base">loading</span><span class="fill">loading</span></div></div>
+<div id="embedLoader"><div class="text">loading<span class="dots"><span>.</span><span>.</span><span>.</span></span></div></div>
 
 <script>
 // ====================================================================
@@ -341,28 +343,10 @@ const MAX_TOKENS   = 1024;           // safety ceiling for live render perf
 
 const statusEl = () => document.getElementById('status');
 function setStatus(html) {
-  // Only feeds the desktop #loadPanel #status. Embed mode shows the unified
-  // "loading" fill driven by setProgressFraction below — no per-step text.
+  // Only feeds the desktop #loadPanel #status. Embed mode shows a centered
+  // "loading…" indicator with pulsing dots (CSS-driven, not progress-bound)
+  // so we don't try to mirror per-step text into the iframe.
   const el = statusEl(); if (el) el.innerHTML = html;
-}
-
-// Monotonic 0..1 progress used by the embed-mode loader. Each pipeline
-// step bumps the fraction to a fixed milestone (or interpolates within a
-// segment for fetch loops). Going only forward avoids visual jitter when
-// status messages re-fire.
-let _progressFraction = 0;
-function setProgressFraction(f) {
-  if (typeof f !== 'number' || isNaN(f)) return;
-  const clamped = Math.max(0, Math.min(1, f));
-  if (clamped < _progressFraction) return;          // monotonic
-  _progressFraction = clamped;
-  const fill = document.querySelector('#embedLoader .fill');
-  if (fill) fill.style.width = (clamped * 100).toFixed(1) + '%';
-}
-function resetProgressFraction() {
-  _progressFraction = 0;
-  const fill = document.querySelector('#embedLoader .fill');
-  if (fill) fill.style.width = '0%';
 }
 // HTML-escape for any value derived from user input or external data that we
 // interpolate into setStatus / showError. Defense-in-depth: existing regex
@@ -637,7 +621,7 @@ async function buildAtlasAuto(pairs) {
 }
 
 function setProgress(pct, active) {
-  // Desktop #loadPanel only — the embed loader uses setProgressFraction.
+  // Desktop #loadPanel only — the embed loader is CSS-only pulsing dots.
   const wrap = document.getElementById('progress');
   if (!wrap) return;
   const bar = wrap.firstElementChild;
@@ -781,7 +765,6 @@ async function buildLiveData(input) {
   const P_IMGS_DONE     = 0.92;
   const P_ATLAS_DONE    = 0.97;
 
-  resetProgressFraction();
   setStatus(`<span>resolving…</span>`);
   let addr = input.trim();
   if (!addr) throw new Error('empty input');
@@ -796,7 +779,6 @@ async function buildLiveData(input) {
   } else if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
     throw new Error('not a valid ENS (.eth) or 0x address');
   }
-  setProgressFraction(P_RESOLVED);
   const short = `${addr.slice(0,6)}…${addr.slice(-4)}`;
 
   // ── Server cache check ──────────────────────────────────────────
@@ -806,9 +788,7 @@ async function buildLiveData(input) {
   // a single binary download.
   setStatus(`<span>checking cache for ${short}…</span>`);
   const cached = await tryFetchCachedAtlas(addr);
-  setProgressFraction(P_CACHE_CHECKED);
   if (cached) {
-    setProgressFraction(1);
     setStatus(`<span class="ok">✓ cached atlas (${cached.meta.count} tokens)</span>`);
     return {
       meta:           cached.meta,
@@ -830,10 +810,8 @@ async function buildLiveData(input) {
     // floor (cache-checked) and let the next milestone push it forward.
     if (total > 0) {
       const f = P_CACHE_CHECKED + (P_NFTS_DONE - P_CACHE_CHECKED) * Math.min(1, cnt / total);
-      setProgressFraction(f);
     }
   });
-  setProgressFraction(P_NFTS_DONE);
   // Filter: not spam + has at least one image URL
   const candidates = [];
   for (const n of nfts) {
@@ -855,11 +833,9 @@ async function buildLiveData(input) {
       setStatus(`<span>fetching images · ${d} / ${t}</span>`);
       setProgress(d / Math.max(1, t), true);
       const f = P_NFTS_DONE + (P_IMGS_DONE - P_NFTS_DONE) * (d / Math.max(1, t));
-      setProgressFraction(f);
     },
   );
   setProgress(0, false);
-  setProgressFraction(P_IMGS_DONE);
   // Pair only tokens with successfully loaded images
   const pairs = [];
   for (let i = 0; i < used.length; i++) {
@@ -869,13 +845,11 @@ async function buildLiveData(input) {
   const failed = used.length - pairs.length;
   setStatus(`<span>building atlas (${pairs.length} tokens)…</span>`);
   const { meta, binBuf } = await buildAtlasAuto(pairs);
-  setProgressFraction(P_ATLAS_DONE);
   // Fire-and-forget: persist this atlas to R2 so the next visit (or every
   // OpenSea iframe load on this NFT) hits the cache path above. Awaited
   // upload would block first paint by ~5-30s for large wallets — not worth
   // it. Failures are logged and otherwise ignored.
   uploadAtlas(addr, meta, binBuf);
-  setProgressFraction(1);
   return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false };
 }
 
@@ -906,11 +880,8 @@ function waitForLoadAndBuild() {
         // "loading" indicator forever. Auto-loaded /embed/<addr> URLs are
         // the common failure path (typo in address, network blip).
         if (document.body.classList.contains('embed')) {
-          const base = document.querySelector('#embedLoader .base');
-          const fill = document.querySelector('#embedLoader .fill');
-          const msg  = `error: ${e.message}`;
-          if (base) base.textContent = msg;
-          if (fill) fill.textContent = msg;
+          const txt = document.querySelector('#embedLoader .text');
+          if (txt) txt.textContent = `error: ${e.message}`;
         }
         btn.disabled = false;
         btn.textContent = LOAD_LABEL;
