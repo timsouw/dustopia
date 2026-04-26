@@ -260,8 +260,8 @@ const SPHERE_SCALE_A   = 0.42;
 const SPHERE_SCALE_B   = 0.09;   // tamer than 0.17 — with N=500 the growth is already huge
 // Hard floor + cap (% of min(W,H)) so low-N wallets still look filled and high-N
 // wallets can't escape the viewport. Floor is what fixes the "1 token = invisible" case.
-const SPHERE_FRAC_MIN  = 0.20;   // never smaller than 20% of the shorter viewport edge
-const SPHERE_FRAC_MAX  = 0.23;   // tightened from 0.25 to leave room for outer-layer collections
+const SPHERE_FRAC_MIN  = 0.17;   // ≈ 17% of shorter viewport edge — leaves a breathing margin so wave-amp particles don't kiss the canvas edge while rotating
+const SPHERE_FRAC_MAX  = 0.20;   // matched to the new MIN ratio (was 0.23) so silhouette safety still scales with default size
 
 // --- collection layering: each collection lives on one of LAYER_COUNT concentric shells ---
 // The base unit sphere is r=1.0. Inner shells (<1.0) sit closer to center, outer (>1.0)
