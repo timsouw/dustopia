@@ -162,27 +162,84 @@ async function handleEns(name, request, env) {
 // metadata JSON whose animation_url loads the live sphere of the token's
 // current owner.
 //
-// FIRST-ITERATION SHORTCUT: owner is hardcoded for the single test token on
-// contract 0x8196e52111255d71732c2187F0F8420704417cE6 #1. Once we add an
-// ownerOf() lookup via Alchemy, this gets replaced with a per-id resolution.
+// Owner is resolved on-demand via Alchemy eth_call to ownerOf(uint256) on
+// the production contract. Result is cached in KV for OWNER_TTL seconds so
+// marketplace polling doesn't hammer the upstream. If the lookup fails for
+// any reason we fall back to OWNER_FALLBACK so the NFT keeps rendering
+// instead of breaking on transient outages.
 
-const TEST_OWNER_FALLBACK = '0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf';
-const METADATA_TTL = 60;  // marketplaces cache for this many seconds
+// OE drop contract on Ethereum mainnet (OpenSea Drops). When/if we add a
+// testnet contract too, this becomes a chain → address map.
+const NFT_CONTRACT   = '0x8196e52111255d71732c2187F0F8420704417cE6';
+// Resilience anchor: the deploy wallet. Used when Alchemy can't tell us who
+// currently owns a token (network blip, key rotation race, etc.).
+const OWNER_FALLBACK = '0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf';
+const OWNER_TTL      = 5 * 60;  // KV TTL for owner lookups (seconds)
+const METADATA_TTL   = 60;      // Cache-Control: max-age on the JSON response
 
 function metadataResponse(body, request, init = {}) {
   // Marketplaces fetch from various servers (often server-to-server, no
   // Origin header). Always allow * for metadata so OpenSea / wallets / dapps
   // can read it without CORS friction. Short Cache-Control lets owner
-  // changes propagate quickly.
+  // changes propagate quickly. Explicit charset=utf-8 keeps em-dashes and
+  // other non-ASCII chars rendering correctly across raw-JSON viewers.
   return new Response(JSON.stringify(body), {
     ...init,
     headers: {
-      'Content-Type':                'application/json',
+      'Content-Type':                'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
       'Cache-Control':              `public, max-age=${METADATA_TTL}`,
       ...(init.headers || {}),
     },
   });
+}
+
+// Look up the current owner of `tokenId` on the OE drop contract.
+// Returns lowercase 0x address, or null if the token doesn't exist / lookup
+// failed. Caches positive results in KV for OWNER_TTL seconds.
+async function lookupOwner(tokenId, env) {
+  const cacheKey = `owner:${NFT_CONTRACT.toLowerCase()}:${tokenId}`;
+  const cached = await env.WALLET_CACHE.get(cacheKey);
+  if (cached) return cached;
+
+  // ABI-encode ownerOf(uint256): selector 0x6352211e + 32-byte tokenId.
+  const paddedId = BigInt(tokenId).toString(16).padStart(64, '0');
+  const data = '0x6352211e' + paddedId;
+  const url = `https://eth-mainnet.g.alchemy.com/v2/${env.ALCHEMY_KEY}`;
+
+  let json;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ALCH_TIMEOUT_MS);
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id:      1,
+        method:  'eth_call',
+        params:  [{ to: NFT_CONTRACT, data }, 'latest'],
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    json = await r.json();
+  } catch {
+    return null;
+  }
+
+  // Contract revert (token doesn't exist) shows up as { error: {...} }.
+  if (json.error || !json.result || json.result === '0x') return null;
+  // ownerOf returns address left-padded to 32 bytes. Last 20 bytes are it.
+  const owner = ('0x' + json.result.slice(-40)).toLowerCase();
+  // Sanity check: should be a valid hex address, not the zero address.
+  if (!/^0x[0-9a-f]{40}$/.test(owner) || owner === '0x' + '00'.repeat(20)) {
+    return null;
+  }
+
+  env.WALLET_CACHE.put(cacheKey, owner, { expirationTtl: OWNER_TTL }).catch(() => {});
+  return owner;
 }
 
 async function handleMetadata(rawTokenId, request, env) {
@@ -193,12 +250,14 @@ async function handleMetadata(rawTokenId, request, env) {
     return errorResponse(400, 'invalid token id', request);
   }
 
-  const owner = TEST_OWNER_FALLBACK;
+  // Look up the current owner; fall back to the deploy wallet so transient
+  // upstream failures don't blank the NFT in marketplaces.
+  const owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
   const liveUrl = `https://dustopia.xyz/#${owner}`;
 
   return metadataResponse({
     name:          `dustopia #${tokenId}`,
-    description:   'Living wallet portrait — every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder\'s collection.',
+    description:   "Living wallet portrait -- every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder's collection.",
     image:         'https://dustopia.xyz/preview.png',
     animation_url: liveUrl,
     external_url:  liveUrl,
