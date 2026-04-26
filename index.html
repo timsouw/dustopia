@@ -636,12 +636,13 @@ async function gzipBuffer(buf) {
 }
 
 // =====================================================================
-// PREVIEW CAPTURE — record ~5s of the live sphere as an animated WebP and
+// PREVIEW CAPTURE — record ~5s of the live sphere as an animated GIF and
 // upload to R2. OpenSea grid tiles can't run our /embed iframe so they
 // fetch the metadata `image` URL; that URL transparently returns this
-// captured WebP once ANY visitor has seeded R2 for the wallet. First
-// visitor pays the (~1s) capture+encode cost; everyone after them sees
-// instant grid animation.
+// captured GIF once ANY visitor has seeded R2 for the wallet. First
+// visitor pays the capture+encode cost; everyone after them sees
+// instant grid animation. (gif.js does the encoding; we tried webpxmux
+// for smaller files but it's not reliably hosted on public CDNs.)
 // =====================================================================
 
 const PREVIEW_W       = 400;
@@ -649,30 +650,29 @@ const PREVIEW_H       = 400;
 const PREVIEW_FRAMES  = 60;
 const PREVIEW_FPS     = 12;
 const PREVIEW_INTERVAL_MS = 1000 / PREVIEW_FPS;
-const PREVIEW_LIB_BASE = 'https://unpkg.com/webpxmux@1.0.0/dist/';
+const GIFJS_BASE = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/';
 
-// Lazy-load the webpxmux wasm encoder. Only invoked once we've confirmed
-// we actually need to capture (i.e. R2 doesn't already have a fresh WebP
-// for this address). Returns the muxer instance or throws.
-let _webpxmuxPromise = null;
-function loadWebpMuxer() {
-  if (_webpxmuxPromise) return _webpxmuxPromise;
-  _webpxmuxPromise = (async () => {
-    if (typeof WebPXMux === 'undefined') {
+// Lazy-load gif.js. The library exposes `GIF` on window after the script
+// runs; the worker.js companion script is fetched at render time using
+// the workerScript option. Only invoked once we've confirmed we actually
+// need to capture (i.e. R2 doesn't already have one for this address).
+let _gifJsPromise = null;
+function loadGifJs() {
+  if (_gifJsPromise) return _gifJsPromise;
+  _gifJsPromise = (async () => {
+    if (typeof GIF === 'undefined') {
       await new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src   = PREVIEW_LIB_BASE + 'webpxmux.min.js';
+        script.src   = GIFJS_BASE + 'gif.js';
         script.onload  = resolve;
-        script.onerror = reject;
+        script.onerror = () => reject(new Error('gif.js script failed'));
         document.head.appendChild(script);
       });
     }
-    if (typeof WebPXMux === 'undefined') throw new Error('WebPXMux unavailable after script load');
-    const xmux = WebPXMux(PREVIEW_LIB_BASE + 'webpxmux.wasm');
-    await xmux.waitRuntime();
-    return xmux;
-  })().catch(e => { _webpxmuxPromise = null; throw e; });
-  return _webpxmuxPromise;
+    if (typeof GIF === 'undefined') throw new Error('GIF global missing after script load');
+    return true;
+  })().catch(e => { _gifJsPromise = null; throw e; });
+  return _gifJsPromise;
 }
 
 // Returns true if R2 already has a captured preview for this addr — in which
@@ -689,51 +689,51 @@ async function tryCaptureAndUploadPreview(addr) {
   if (!API_URL || !addr) return;
   if (await hasCachedPreview(addr)) return;          // someone else already seeded it
 
+  try { await loadGifJs(); }
+  catch (e) { console.warn('gif.js load failed', e); return; }
+
   const stage = document.getElementById('stage');
   if (!stage) return;
+
+  const gif = new GIF({
+    workers:      2,
+    quality:      10,                    // 1..30 (lower = better, slower)
+    width:        PREVIEW_W,
+    height:       PREVIEW_H,
+    workerScript: GIFJS_BASE + 'gif.worker.js',
+    background:   '#14141a',
+    transparent:  null,
+  });
+
+  // Capture frames at PREVIEW_FPS by drawImage()-ing the stage canvas onto
+  // a small offscreen canvas, then handing the canvas to gif.js (with copy:
+  // true so subsequent frames don't overwrite it).
   const off    = document.createElement('canvas');
   off.width    = PREVIEW_W;
   off.height   = PREVIEW_H;
-  const offCtx = off.getContext('2d', { willReadFrequently: true });
+  const offCtx = off.getContext('2d');
 
-  // Capture frames at PREVIEW_FPS, downscaled to PREVIEW_W × PREVIEW_H.
-  // Using setTimeout (not requestAnimationFrame) to decouple capture pace
-  // from render pace — we want a steady 12fps even if render hits 144Hz.
-  const frames = [];
   for (let i = 0; i < PREVIEW_FRAMES; i++) {
     const t0 = performance.now();
     offCtx.drawImage(stage, 0, 0, PREVIEW_W, PREVIEW_H);
-    let rgba;
-    try { rgba = offCtx.getImageData(0, 0, PREVIEW_W, PREVIEW_H).data; }
-    catch { return; }
-    frames.push({ duration: PREVIEW_INTERVAL_MS, isKeyframe: i === 0, rgba });
+    gif.addFrame(off, { delay: PREVIEW_INTERVAL_MS, copy: true });
     const wait = Math.max(0, PREVIEW_INTERVAL_MS - (performance.now() - t0));
     await new Promise(r => setTimeout(r, wait));
   }
 
-  let xmux;
-  try { xmux = await loadWebpMuxer(); }
-  catch (e) { console.warn('webpxmux load failed', e); return; }
-
-  let buf;
-  try {
-    buf = await xmux.encodeFrames({
-      frameCount: frames.length,
-      width:      PREVIEW_W,
-      height:     PREVIEW_H,
-      loopCount:  0,                     // 0 = loop forever
-      bgColor:    0xff14141a,            // ARGB matching site bg
-      frames,
-    });
-  } catch (e) { console.warn('webpxmux encode failed', e); return; }
+  const blob = await new Promise((resolve, reject) => {
+    gif.on('finished', resolve);
+    gif.on('abort', () => reject(new Error('gif aborted')));
+    try { gif.render(); } catch (e) { reject(e); }
+  });
 
   try {
     const r = await fetch(`${API_URL}/api/preview-cap/${addr}`, {
       method:  'PUT',
-      headers: { 'Content-Type': 'image/webp' },
-      body:    buf,
+      headers: { 'Content-Type': 'image/gif' },
+      body:    blob,
     });
-    if (!r.ok) console.warn('preview upload', r.status);
+    if (!r.ok) console.warn('preview upload', r.status, await r.text().catch(() => ''));
   } catch (e) { console.warn('preview upload err', e); }
 }
 
