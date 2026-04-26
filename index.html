@@ -652,10 +652,12 @@ const PREVIEW_FPS     = 12;
 const PREVIEW_INTERVAL_MS = 1000 / PREVIEW_FPS;
 const GIFJS_BASE = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/';
 
-// Lazy-load gif.js. The library exposes `GIF` on window after the script
-// runs; the worker.js companion script is fetched at render time using
-// the workerScript option. Only invoked once we've confirmed we actually
-// need to capture (i.e. R2 doesn't already have one for this address).
+// Lazy-load gif.js + a same-origin blob URL for gif.worker.js. The encoder
+// spawns Web Workers via `new Worker(workerScript)`, which browsers block
+// when the URL is cross-origin (jsdelivr ≠ our origin) — the worker dies
+// silently, render() never fires 'finished', and the upload never happens.
+// Workaround: fetch the worker source as text, wrap in a Blob, hand a
+// blob: URL to gif.js. Same-origin from the browser's POV.
 let _gifJsPromise = null;
 function loadGifJs() {
   if (_gifJsPromise) return _gifJsPromise;
@@ -670,7 +672,11 @@ function loadGifJs() {
       });
     }
     if (typeof GIF === 'undefined') throw new Error('GIF global missing after script load');
-    return true;
+    const workerRes = await fetch(GIFJS_BASE + 'gif.worker.js');
+    if (!workerRes.ok) throw new Error('gif.worker.js fetch failed: ' + workerRes.status);
+    const workerSrc = await workerRes.text();
+    const workerUrl = URL.createObjectURL(new Blob([workerSrc], { type: 'application/javascript' }));
+    return workerUrl;
   })().catch(e => { _gifJsPromise = null; throw e; });
   return _gifJsPromise;
 }
@@ -689,7 +695,8 @@ async function tryCaptureAndUploadPreview(addr) {
   if (!API_URL || !addr) return;
   if (await hasCachedPreview(addr)) return;          // someone else already seeded it
 
-  try { await loadGifJs(); }
+  let workerUrl;
+  try { workerUrl = await loadGifJs(); }
   catch (e) { console.warn('gif.js load failed', e); return; }
 
   const stage = document.getElementById('stage');
@@ -700,7 +707,7 @@ async function tryCaptureAndUploadPreview(addr) {
     quality:      10,                    // 1..30 (lower = better, slower)
     width:        PREVIEW_W,
     height:       PREVIEW_H,
-    workerScript: GIFJS_BASE + 'gif.worker.js',
+    workerScript: workerUrl,             // blob: URL — same-origin from browser POV
     background:   '#14141a',
     transparent:  null,
   });
@@ -720,12 +727,21 @@ async function tryCaptureAndUploadPreview(addr) {
     const wait = Math.max(0, PREVIEW_INTERVAL_MS - (performance.now() - t0));
     await new Promise(r => setTimeout(r, wait));
   }
+  console.log('[preview] captured', PREVIEW_FRAMES, 'frames; encoding…');
 
-  const blob = await new Promise((resolve, reject) => {
-    gif.on('finished', resolve);
-    gif.on('abort', () => reject(new Error('gif aborted')));
-    try { gif.render(); } catch (e) { reject(e); }
-  });
+  let blob;
+  try {
+    blob = await new Promise((resolve, reject) => {
+      // 60s timeout: 60 frames × 400² should encode in 5-30s on any modern
+      // CPU. If it's still hanging at 60s something's wrong (worker died,
+      // CDN blocked, etc.) — log and bail rather than sit forever.
+      const timer = setTimeout(() => reject(new Error('gif render timeout (60s)')), 60_000);
+      gif.on('finished', b => { clearTimeout(timer); resolve(b); });
+      gif.on('abort',   () => { clearTimeout(timer); reject(new Error('gif aborted')); });
+      try { gif.render(); } catch (e) { clearTimeout(timer); reject(e); }
+    });
+  } catch (e) { console.warn('[preview] gif encode failed', e); return; }
+  console.log('[preview] encoded', blob.size, 'bytes; uploading…');
 
   try {
     const r = await fetch(`${API_URL}/api/preview-cap/${addr}`, {
@@ -733,8 +749,9 @@ async function tryCaptureAndUploadPreview(addr) {
       headers: { 'Content-Type': 'image/gif' },
       body:    blob,
     });
-    if (!r.ok) console.warn('preview upload', r.status, await r.text().catch(() => ''));
-  } catch (e) { console.warn('preview upload err', e); }
+    if (!r.ok) console.warn('[preview] upload', r.status, await r.text().catch(() => ''));
+    else      console.log('[preview] uploaded ok');
+  } catch (e) { console.warn('[preview] upload err', e); }
 }
 
 // Fire-and-forget upload of a freshly-built atlas. Binary first (the
