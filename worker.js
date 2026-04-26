@@ -63,14 +63,21 @@ const ALCH_TIMEOUT_MS = 12000;
 // (KV writes propagate within ~60s), so this is a soft deterrent against quota
 // drain rather than a precise throttle. For stricter limits, layer Cloudflare's
 // built-in rate-limiting rules on top.
-const RATE_LIMIT_PER_MIN = 60;
+//
+// Two buckets: GENERAL for read-heavy endpoints, PUT for write endpoints
+// (atlas, preview-cap, config). PUT is much tighter because every entry
+// touches R2 storage — abuse there has a real $ cost, while abuse of
+// reads only burns Worker CPU which Cloudflare already free-tier-caps.
+const RATE_LIMIT_PER_MIN     = 60;
+const RATE_LIMIT_PUT_PER_MIN = 10;
 
-async function rateLimitOk(request, env) {
+async function rateLimitOk(request, env, bucket = 'general') {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
   const minute = Math.floor(Date.now() / 60000);
-  const key = `rl:${ip}:${minute}`;
+  const cap = bucket === 'put' ? RATE_LIMIT_PUT_PER_MIN : RATE_LIMIT_PER_MIN;
+  const key = `rl:${bucket}:${ip}:${minute}`;
   const current = parseInt((await env.WALLET_CACHE.get(key)) || '0', 10);
-  if (current >= RATE_LIMIT_PER_MIN) return false;
+  if (current >= cap) return false;
   // Fire-and-forget increment; 90s TTL ensures keys self-expire.
   env.WALLET_CACHE.put(key, String(current + 1), { expirationTtl: 90 }).catch(() => {});
   return true;
@@ -188,8 +195,64 @@ async function handleEns(rawName, request, env) {
 }
 
 // =====================================================================
-// NFT METADATA — what marketplaces (OpenSea, kinds) call via tokenURI()
+// OWNED TOKENS — list of dustopia tokenIds owned by an address. Used by
+// the /configure page to populate the user's "your tokens" list right
+// after wallet connect. One Alchemy call, short KV cache. Public — token
+// ownership is on-chain anyway, no privacy concern in exposing the read.
 // =====================================================================
+const OWNED_TTL = 60;             // seconds — ownership shifts often during sales
+
+async function handleOwned(addr, request, env) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    return errorResponse(400, 'invalid address', request);
+  }
+  const addrLower = addr.toLowerCase();
+  const cacheKey = `owned:${addrLower}`;
+  const cached = await env.WALLET_CACHE.get(cacheKey);
+  if (cached) {
+    return jsonResponse(cached, request, { headers: { 'X-Cache': 'HIT' } });
+  }
+
+  // Alchemy paginates getNFTsForOwner at 100 per page; whales with hundreds
+  // of dustopia tokens are unlikely but this loop costs nothing in the
+  // common (≤1 page) case and avoids silently truncating the list.
+  const tokenIds = [];
+  let pageKey = null;
+  for (let p = 0; p < 50; p++) {
+    const u = new URL(`https://eth-mainnet.g.alchemy.com/nft/v3/${env.ALCHEMY_KEY}/getNFTsForOwner`);
+    u.searchParams.set('owner', addr);
+    u.searchParams.append('contractAddresses[]', NFT_CONTRACT);
+    u.searchParams.set('pageSize', '100');
+    u.searchParams.set('withMetadata', 'false');
+    if (pageKey) u.searchParams.set('pageKey', pageKey);
+
+    let r;
+    try { r = await upstreamFetch(u.toString()); }
+    catch (e) { return errorResponse(502, `alchemy unreachable: ${e.message}`, request); }
+    if (!r.ok) return errorResponse(502, `alchemy HTTP ${r.status}`, request);
+
+    let data;
+    try { data = await r.json(); }
+    catch { return errorResponse(502, 'alchemy returned invalid JSON', request); }
+
+    for (const n of (data.ownedNfts || [])) {
+      const id = n && (n.tokenId || (n.id && n.id.tokenId));
+      if (typeof id !== 'string') continue;
+      // Alchemy may return either decimal ("1") or hex ("0x01"). Normalize.
+      let dec;
+      try { dec = BigInt(id).toString(10); }
+      catch { continue; }
+      if (!/^\d+$/.test(dec) || dec.length > 78) continue;
+      tokenIds.push(dec);
+    }
+    if (!data.pageKey) break;
+    pageKey = data.pageKey;
+  }
+
+  const body = JSON.stringify({ contract: NFT_CONTRACT, owner: addrLower, tokenIds });
+  env.WALLET_CACHE.put(cacheKey, body, { expirationTtl: OWNED_TTL }).catch(() => {});
+  return jsonResponse(body, request, { headers: { 'X-Cache': 'MISS' } });
+}
 // The drop contract's baseURI is set to https://api.dustopia.xyz/api/metadata/
 // so tokenURI(N) becomes /api/metadata/N. We respond with a standard ERC-721
 // metadata JSON whose animation_url loads the live sphere of the token's
@@ -264,7 +327,10 @@ async function lookupOwner(tokenId, env) {
 
   // Contract revert (token doesn't exist) shows up as { error: {...} }.
   if (json.error || !json.result || json.result === '0x') return null;
-  // ownerOf returns address left-padded to 32 bytes. Last 20 bytes are it.
+  // ownerOf returns 32-byte word: '0x' + 64 hex chars, address in last 40.
+  // Anything shorter is a malformed RPC response — refuse rather than
+  // truncate our way into a fake-looking address.
+  if (typeof json.result !== 'string' || json.result.length < 66) return null;
   const owner = ('0x' + json.result.slice(-40)).toLowerCase();
   // Sanity check: should be a valid hex address, not the zero address.
   if (!/^0x[0-9a-f]{40}$/.test(owner) || owner === '0x' + '00'.repeat(20)) {
@@ -538,9 +604,11 @@ async function handleMetadata(rawTokenId, request, env) {
   // against any future code path that bypasses lookupOwner's own checks.
   let owner = (await lookupOwner(tokenId, env)) || OWNER_FALLBACK;
   if (!/^0x[0-9a-f]{40}$/.test(owner)) owner = OWNER_FALLBACK;
-  // animation_url → chrome-free embed view (just the sphere). external_url →
-  // the landing page so the OpenSea "external link" still feels right.
-  const animUrl     = `https://dustopia.xyz/embed/${owner}`;
+  // animation_url → chrome-free embed view (just the sphere) with tokenId
+  // hint so the renderer can fetch the per-token config and filter the
+  // wallet to the holder's chosen subset. external_url → the landing
+  // page so the OpenSea "external link" still feels right.
+  const animUrl     = `https://dustopia.xyz/embed/${owner}?token=${tokenId}`;
   const externalUrl = `https://dustopia.xyz/#${owner}`;
   const shortOwner  = `${owner.slice(0, 6)}…${owner.slice(-4)}`;
 
@@ -596,9 +664,23 @@ const ATLAS_TOKEN_LIMIT = 1024;        // mirror MAX_TOKENS in index.html
 const ATLAS_META_MAX = 256 * 1024;     // 256 KiB ceiling for the JSON meta
 const ATLAS_BIN_MAX  = ATLAS_TOKEN_LIMIT * 192 * 192 * 3 + 1024;
 const ATLAS_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+// Hard ceiling on atlas R2 entries per address. Each saved selection adds
+// up to 4 entries (2 grids × bin/json), so even a holder with a dozen
+// saved selections lands well under this. Real purpose: stop unauthenticated
+// PUT spam from filling R2 with random fingerprints under one address.
+const ATLAS_PER_ADDR_CAP = 64;
 
-function atlasKey(addr, grid, kind) {
-  return `${addr.toLowerCase()}/${grid}.${kind}`;
+// Per-(addr, grid, fingerprint) cache key. The frontend computes a SHA-256
+// fingerprint of the selection blob and passes it as ?fp=<hex16>. fp='all'
+// (default subset = entire wallet) keeps the legacy key shape so existing
+// R2 entries stay reachable; any non-'all' fp lives in a sibling key. fp
+// must be /^[a-z0-9]{16}$/ or the literal 'all' — anything else is rejected
+// at the route layer to keep the key namespace clean.
+const ATLAS_FP_RE = /^[a-z0-9]{16}$/;
+function atlasKey(addr, grid, kind, fp) {
+  const a = addr.toLowerCase();
+  if (!fp || fp === 'all') return `${a}/${grid}.${kind}`;
+  return `${a}/${grid}-${fp}.${kind}`;
 }
 
 function atlasResponse(body, request, init = {}) {
@@ -615,7 +697,7 @@ function atlasResponse(body, request, init = {}) {
   });
 }
 
-async function handleAtlasGet(addr, grid, wantMeta, request, env, ctx) {
+async function handleAtlasGet(addr, grid, wantMeta, fp, request, env, ctx) {
   // ── Edge cache layer ──────────────────────────────────────────────
   // Cloudflare's free per-colocation cache. R2 is fast but every miss
   // costs a Class B op + cross-region latency. Wrapping with caches.default
@@ -631,7 +713,7 @@ async function handleAtlasGet(addr, grid, wantMeta, request, env, ctx) {
     return new Response(hit.body, { status: hit.status, headers: h });
   }
 
-  const key = atlasKey(addr, grid, wantMeta ? 'json' : 'bin');
+  const key = atlasKey(addr, grid, wantMeta ? 'json' : 'bin', fp);
   const obj = await env.ATLAS.get(key);
   if (!obj) return errorResponse(404, 'atlas not cached', request);
 
@@ -656,7 +738,7 @@ async function handleAtlasGet(addr, grid, wantMeta, request, env, ctx) {
   return resp;
 }
 
-async function handleAtlasPut(addr, grid, wantMeta, request, env) {
+async function handleAtlasPut(addr, grid, wantMeta, fp, request, env) {
   const ct = (request.headers.get('Content-Type') || '').toLowerCase();
   const expectedCt = wantMeta ? 'application/json' : 'application/octet-stream';
   if (!ct.startsWith(expectedCt)) {
@@ -730,21 +812,44 @@ async function handleAtlasPut(addr, grid, wantMeta, request, env) {
   };
   if (isGzipped) httpMetadata.contentEncoding = ce;
 
-  await env.ATLAS.put(atlasKey(addr, grid, wantMeta ? 'json' : 'bin'), buf, { httpMetadata });
+  // Per-addr R2 entry cap. Atlas keys for one address fan out by grid
+  // (128/192) × fp (one per saved selection × bin/json). Even a heavy
+  // user shouldn't accumulate more than a few dozen entries; the cap
+  // here closes the unauthenticated-PUT spam vector without breaking
+  // the legitimate "anyone can populate the cache for any wallet"
+  // model. We only enforce when adding a NEW key; updates to an
+  // existing key (same fp) bypass the cap.
+  const targetKey = atlasKey(addr, grid, wantMeta ? 'json' : 'bin', fp);
+  const existing  = await env.ATLAS.head(targetKey).catch(() => null);
+  if (!existing) {
+    const list = await env.ATLAS.list({
+      prefix: `${addr.toLowerCase()}/`,
+      limit: ATLAS_PER_ADDR_CAP + 1,
+    }).catch(() => null);
+    if (list && list.objects.length >= ATLAS_PER_ADDR_CAP) {
+      return errorResponse(429, `atlas cache cap reached (${ATLAS_PER_ADDR_CAP} entries per address)`, request);
+    }
+  }
+
+  await env.ATLAS.put(targetKey, buf, { httpMetadata });
   return jsonResponse({ ok: true, bytes: buf.byteLength, encoded: isGzipped ? ce : null }, request);
 }
 
 async function handleAtlasDelete(addr, request, env, ctx) {
-  // Wipe both grids in both kinds. Cheap because R2 deletes are individual
-  // ops; only 4 keys per address. Idempotent — missing keys are no-ops.
+  // Wipe every (grid, fingerprint) entry for this address. We list under
+  // the addr prefix instead of enumerating because the holder may have
+  // saved several distinct selections — each has its own fp-suffixed key.
+  // Idempotent — missing keys are no-ops.
+  const a = addr.toLowerCase();
+  let truncated = true;
+  let cursor = undefined;
   const keys = [];
-  const cacheUrls = [];
-  const origin = new URL(request.url).origin;
-  for (const grid of ATLAS_GRIDS_OK) {
-    keys.push(atlasKey(addr, grid, 'bin'));
-    keys.push(atlasKey(addr, grid, 'json'));
-    cacheUrls.push(`${origin}/api/atlas/${addr}?grid=${grid}`);
-    cacheUrls.push(`${origin}/api/atlas/${addr}?grid=${grid}&meta=1`);
+  while (truncated && keys.length < 256) {  // hard ceiling = sanity
+    const list = await env.ATLAS.list({ prefix: `${a}/`, cursor }).catch(() => null);
+    if (!list) break;
+    for (const obj of list.objects) keys.push(obj.key);
+    truncated = list.truncated;
+    cursor = list.cursor;
   }
   await Promise.all(keys.map(k => env.ATLAS.delete(k).catch(() => {})));
   // Edge cache purge — only clears this region's edge node. Other regions
@@ -752,6 +857,12 @@ async function handleAtlasDelete(addr, request, env, ctx) {
   // a manual refresh button; if global propagation matters later we'll
   // version the URL or use the Cache Purge API.
   if (ctx) {
+    const origin = new URL(request.url).origin;
+    const cacheUrls = [];
+    for (const grid of ATLAS_GRIDS_OK) {
+      cacheUrls.push(`${origin}/api/atlas/${addr}?grid=${grid}`);
+      cacheUrls.push(`${origin}/api/atlas/${addr}?grid=${grid}&meta=1`);
+    }
     ctx.waitUntil(Promise.all(cacheUrls.map(u =>
       caches.default.delete(new Request(u, { method: 'GET' })).catch(() => {})
     )));
@@ -772,8 +883,14 @@ async function handleAtlas(addr, request, env, ctx) {
     return errorResponse(400, `grid must be one of ${[...ATLAS_GRIDS_OK].join(',')}`, request);
   }
   const wantMeta = url.searchParams.get('meta') === '1';
-  if (request.method === 'GET') return handleAtlasGet(addr, grid, wantMeta, request, env, ctx);
-  if (request.method === 'PUT') return handleAtlasPut(addr, grid, wantMeta, request, env);
+  // Optional per-selection fingerprint. Default 'all' = entire wallet,
+  // matches the legacy key shape so existing R2 entries stay reachable.
+  const fpRaw = url.searchParams.get('fp') || 'all';
+  if (fpRaw !== 'all' && !ATLAS_FP_RE.test(fpRaw)) {
+    return errorResponse(400, 'invalid fp', request);
+  }
+  if (request.method === 'GET') return handleAtlasGet(addr, grid, wantMeta, fpRaw, request, env, ctx);
+  if (request.method === 'PUT') return handleAtlasPut(addr, grid, wantMeta, fpRaw, request, env);
   return errorResponse(405, 'method not allowed', request);
 }
 
@@ -988,6 +1105,7 @@ async function fetchOwnerFresh(tokenId, env) {
     json = await r.json();
   } catch { return null; }
   if (json.error || !json.result || json.result === '0x') return null;
+  if (typeof json.result !== 'string' || json.result.length < 66) return null;
   const owner = ('0x' + json.result.slice(-40)).toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(owner) || owner === '0x' + '00'.repeat(20)) return null;
   return owner;
@@ -1091,10 +1209,12 @@ export default {
 
     // Atlas cache: GET (any browser), PUT (frontend after build), DELETE
     // (refresh button / future Alchemy webhook). Routed before the global
-    // method check below because it accepts non-GET methods.
+    // method check below because it accepts non-GET methods. PUTs use the
+    // tighter rate-limit bucket since each one writes R2.
     const atlasMatch = path.match(/^\/api\/atlas\/([^/]+)\/?$/);
     if (atlasMatch) {
-      if (!(await rateLimitOk(request, env))) {
+      const bucket = (request.method === 'PUT' || request.method === 'DELETE') ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handleAtlas(atlasMatch[1], request, env, ctx);
@@ -1102,11 +1222,11 @@ export default {
 
     // Preview capture upload/serve. PUT from /embed/<addr> after the sphere
     // is captured; HEAD from /embed/<addr> to skip re-captures; GET for
-    // direct testing. Routed before the global method check below because
-    // it accepts non-GET methods.
+    // direct testing.
     const previewCapMatch = path.match(/^\/api\/preview-cap\/([^/]+)\/?$/);
     if (previewCapMatch) {
-      if (!(await rateLimitOk(request, env))) {
+      const bucket = (request.method === 'PUT' || request.method === 'DELETE') ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handlePreviewCap(previewCapMatch[1], request, env, ctx);
@@ -1116,7 +1236,8 @@ export default {
     // Routed before the global GET-only check because PUT is allowed.
     const configMatch = path.match(/^\/api\/config\/([^/]+)\/?$/);
     if (configMatch) {
-      if (!(await rateLimitOk(request, env))) {
+      const bucket = request.method === 'PUT' ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handleConfig(configMatch[1], request, env, ctx);
@@ -1174,6 +1295,12 @@ export default {
     const ensMatch = path.match(/^\/api\/ens\/([^/]+)\/?$/);
     if (ensMatch) {
       return handleEns(decodeURIComponent(ensMatch[1]), request, env);
+    }
+
+    // /api/owned/<address> — dustopia tokenIds owned by addr
+    const ownedMatch = path.match(/^\/api\/owned\/([^/]+)\/?$/);
+    if (ownedMatch) {
+      return handleOwned(ownedMatch[1], request, env);
     }
 
     return errorResponse(404, 'not found', request);

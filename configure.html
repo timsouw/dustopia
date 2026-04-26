@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>configure / dustopia</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; min-height:100vh;
+    background:#14141a; color:#e7e7ea;
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  }
+  body.light { background:#f4f4f5; color:#18181b; }
+  a { color:inherit; text-decoration:none; }
+
+  /* ── Header ─────────────────────────────────────────────────── */
+  header {
+    position:sticky; top:0; z-index:50;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 22px;
+    background:rgba(20,20,26,.78); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  body.light header { background:rgba(244,244,245,.86); border-color:rgba(0,0,0,.08); }
+  .brand { font-size:13px; letter-spacing:.04em; }
+  .brand strong { font-weight:600; }
+  .brand .sep { opacity:.4; margin:0 8px; }
+  .brand .crumb { color:#9a9aa5; }
+  body.light .brand .crumb { color:#71717a; }
+
+  .head-actions { display:flex; gap:8px; align-items:center; }
+  .btn {
+    background:transparent; border:1px solid rgba(255,255,255,.18); color:#e7e7ea;
+    font-family:inherit; font-size:11px; letter-spacing:.04em;
+    padding:6px 12px; border-radius:6px; cursor:pointer;
+    transition:border-color 120ms, color 120ms;
+  }
+  .btn:hover  { border-color:#e7e7ea; color:#fff; }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .btn-primary { background:#e7e7ea; color:#101217; border-color:#e7e7ea; font-weight:600; }
+  .btn-primary:hover { background:#fff; color:#101217; }
+  body.light .btn { color:#18181b; border-color:rgba(0,0,0,.18); }
+  body.light .btn:hover { color:#000; border-color:#000; }
+  body.light .btn-primary { background:#18181b; color:#fafafa; border-color:#18181b; }
+  body.light .btn-primary:hover { background:#000; color:#fafafa; }
+
+  .wallet-pill {
+    display:flex; align-items:center; gap:6px;
+    padding:5px 10px; border-radius:6px;
+    background:rgba(255,255,255,.06);
+    font-family:"SF Mono","Menlo",monospace; font-size:11px;
+  }
+  body.light .wallet-pill { background:rgba(0,0,0,.06); }
+  .wallet-pill .dot { width:6px; height:6px; border-radius:50%; background:#9fe8c0; }
+  body.light .wallet-pill .dot { background:#047857; }
+  .wallet-pill .name { color:#9a9aa5; font-size:10px; letter-spacing:.04em; }
+  body.light .wallet-pill .name { color:#71717a; }
+
+  /* ── Main / states ──────────────────────────────────────────── */
+  main { max-width:1180px; margin:0 auto; padding:32px 22px 80px; }
+  .hint { color:#9a9aa5; font-size:12px; line-height:1.6; }
+  body.light .hint { color:#71717a; }
+
+  /* Disconnected state */
+  .empty-state {
+    text-align:center; padding:80px 20px;
+  }
+  .empty-state h2 { font-size:22px; font-weight:500; margin-bottom:14px; letter-spacing:-0.01em; }
+  .empty-state p { color:#9a9aa5; font-size:13px; line-height:1.7; margin-bottom:26px; max-width:440px; margin-left:auto; margin-right:auto; }
+  body.light .empty-state p { color:#71717a; }
+
+  .wallet-list {
+    display:flex; flex-direction:column; gap:8px;
+    max-width:340px; margin:0 auto;
+  }
+  .wallet-option {
+    display:flex; align-items:center; gap:12px;
+    padding:14px 16px;
+    background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.10);
+    border-radius:10px; cursor:pointer;
+    transition:border-color 120ms, background 120ms;
+    text-align:left;
+    color:inherit; font:inherit;
+  }
+  .wallet-option:hover { border-color:rgba(255,255,255,.4); background:rgba(255,255,255,.07); }
+  body.light .wallet-option { background:rgba(0,0,0,.03); border-color:rgba(0,0,0,.10); }
+  body.light .wallet-option:hover { border-color:rgba(0,0,0,.4); background:rgba(0,0,0,.06); }
+  .wallet-option img { width:24px; height:24px; border-radius:6px; }
+  .wallet-option .label { flex:1; font-size:13px; font-weight:500; }
+  .wallet-option .arrow { color:#9a9aa5; font-size:14px; }
+
+  /* Token list (after connect) */
+  .section-title { font-size:13px; letter-spacing:.04em; color:#9a9aa5; text-transform:uppercase; margin-bottom:14px; }
+  body.light .section-title { color:#71717a; }
+  .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+  .token-card {
+    background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08);
+    border-radius:12px; padding:18px; cursor:pointer;
+    transition:border-color 120ms, transform 120ms;
+    color:inherit; font:inherit; text-align:left;
+  }
+  .token-card:hover { border-color:rgba(255,255,255,.32); transform:translateY(-1px); }
+  body.light .token-card { background:#fff; border-color:rgba(0,0,0,.08); }
+  body.light .token-card:hover { border-color:rgba(0,0,0,.4); }
+  .token-card .id { font-size:18px; font-weight:600; margin-bottom:4px; }
+  .token-card .sub { font-size:11px; color:#9a9aa5; }
+  body.light .token-card .sub { color:#71717a; }
+  .token-card .row { display:flex; justify-content:space-between; align-items:flex-end; margin-top:18px; }
+  .token-card .edit-link { font-size:11px; color:#cfd1d7; }
+  body.light .token-card .edit-link { color:#27272a; }
+
+  /* Loading / error overlays */
+  .status-line { padding:14px 18px; font-size:12px; color:#9a9aa5; text-align:center; }
+  body.light .status-line { color:#71717a; }
+  .status-line.err { color:#ff7e7e; }
+  body.light .status-line.err { color:#b91c1c; }
+
+  /* Editor split layout */
+  .editor-grid {
+    display:grid; grid-template-columns:minmax(320px, 1fr) minmax(320px, 440px);
+    gap:24px; align-items:start;
+  }
+  @media (max-width: 880px) { .editor-grid { grid-template-columns:1fr; } }
+
+  .editor-back { font-size:11px; color:#9a9aa5; margin-bottom:14px; cursor:pointer; display:inline-block; }
+  body.light .editor-back { color:#71717a; }
+  .editor-back:hover { color:#e7e7ea; }
+  body.light .editor-back:hover { color:#18181b; }
+  .editor-title { font-size:22px; font-weight:500; letter-spacing:-0.01em; margin-bottom:18px; }
+
+  .preview-frame {
+    width:100%; aspect-ratio:1/1;
+    border:1px solid rgba(255,255,255,.08); border-radius:14px;
+    background:#14141a; overflow:hidden;
+    position:relative;
+  }
+  body.light .preview-frame { border-color:rgba(0,0,0,.08); background:#fafafa; }
+  .preview-frame iframe { width:100%; height:100%; border:0; display:block; }
+  .preview-stale {
+    position:absolute; inset:auto 12px 12px auto;
+    padding:6px 10px; border-radius:6px;
+    background:rgba(0,0,0,.6); color:#e7e7ea;
+    font-size:10px; letter-spacing:.05em;
+    opacity:0; transition:opacity 200ms; pointer-events:none;
+  }
+  body.light .preview-stale { background:rgba(255,255,255,.85); color:#18181b; border:1px solid rgba(0,0,0,.1); }
+  .preview-stale.show { opacity:1; }
+
+  .editor-side {
+    background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.08);
+    border-radius:14px; padding:16px;
+    display:flex; flex-direction:column; gap:14px;
+    min-height:480px;
+  }
+  body.light .editor-side { background:#fff; border-color:rgba(0,0,0,.08); }
+
+  .mode-toggle { display:flex; gap:6px; padding:3px; background:rgba(255,255,255,.05); border-radius:8px; }
+  body.light .mode-toggle { background:rgba(0,0,0,.05); }
+  .mode-toggle button {
+    flex:1; padding:7px; border:0; background:transparent;
+    color:#9a9aa5; font:inherit; font-size:12px; letter-spacing:.04em;
+    border-radius:6px; cursor:pointer;
+    transition:background 120ms, color 120ms;
+  }
+  .mode-toggle button.active { background:#e7e7ea; color:#101217; font-weight:600; }
+  body.light .mode-toggle button { color:#71717a; }
+  body.light .mode-toggle button.active { background:#18181b; color:#fafafa; }
+
+  .search-input {
+    width:100%; padding:8px 12px; border-radius:8px;
+    background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.10);
+    color:#e7e7ea; font:inherit; font-size:12px; outline:none;
+  }
+  .search-input:focus { border-color:#e7e7ea; }
+  body.light .search-input { background:#fff; color:#18181b; border-color:rgba(0,0,0,.12); }
+  body.light .search-input:focus { border-color:#18181b; }
+
+  .tree-status { font-size:11px; color:#9a9aa5; padding:4px 0; }
+  body.light .tree-status { color:#71717a; }
+
+  .tree {
+    flex:1; min-height:0; overflow:auto;
+    border-top:1px solid rgba(255,255,255,.06); padding-top:8px;
+    margin:0 -4px;
+  }
+  body.light .tree { border-top-color:rgba(0,0,0,.08); }
+
+  .tree.disabled { opacity:.4; pointer-events:none; }
+
+  .col-row {
+    display:flex; align-items:center; gap:10px;
+    padding:8px 8px; border-radius:6px; cursor:pointer;
+    transition:background 100ms;
+  }
+  .col-row:hover { background:rgba(255,255,255,.04); }
+  body.light .col-row:hover { background:rgba(0,0,0,.04); }
+  .col-row .caret { width:14px; text-align:center; font-size:11px; color:#9a9aa5; transition:transform 120ms; }
+  .col-row.expanded .caret { transform:rotate(90deg); }
+  .col-row .col-name { flex:1; font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .col-row .col-count { font-size:11px; color:#9a9aa5; }
+  body.light .col-row .col-count { color:#71717a; }
+
+  .tk-list { padding:2px 14px 8px 38px; display:none; }
+  .col-row.expanded + .tk-list { display:block; }
+
+  .tk-row {
+    display:flex; align-items:center; gap:10px;
+    padding:5px 4px; border-radius:5px; cursor:pointer;
+    font-size:12px;
+  }
+  .tk-row:hover { background:rgba(255,255,255,.04); }
+  body.light .tk-row:hover { background:rgba(0,0,0,.04); }
+  .tk-row .thumb { width:22px; height:22px; border-radius:4px; background:#222; flex-shrink:0; object-fit:cover; }
+  body.light .tk-row .thumb { background:#e4e4e7; }
+  .tk-row .tk-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tk-row .tk-id   { font-size:10px; color:#9a9aa5; font-family:"SF Mono",monospace; }
+  body.light .tk-row .tk-id { color:#71717a; }
+
+  .cb {
+    width:14px; height:14px; border:1.5px solid rgba(255,255,255,.4); border-radius:3px;
+    flex-shrink:0; display:flex; align-items:center; justify-content:center;
+    background:transparent; transition:background 100ms, border-color 100ms;
+  }
+  body.light .cb { border-color:rgba(0,0,0,.4); }
+  .cb.checked { background:#e7e7ea; border-color:#e7e7ea; }
+  .cb.checked::before { content:"✓"; font-size:10px; color:#101217; line-height:1; }
+  body.light .cb.checked { background:#18181b; border-color:#18181b; }
+  body.light .cb.checked::before { color:#fafafa; }
+  .cb.partial { background:rgba(231,231,234,.5); }
+  body.light .cb.partial { background:rgba(24,24,27,.5); }
+  .cb.partial::before { content:"–"; font-size:11px; color:#101217; }
+  body.light .cb.partial::before { color:#fafafa; }
+
+  .save-bar {
+    border-top:1px solid rgba(255,255,255,.06); padding-top:14px;
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+  }
+  body.light .save-bar { border-top-color:rgba(0,0,0,.08); }
+  .save-bar .summary { font-size:11px; color:#9a9aa5; }
+  body.light .save-bar .summary { color:#71717a; }
+
+  /* Hidden helper */
+  .hidden { display:none !important; }
+</style>
+</head>
+<body class="light">
+
+<header>
+  <div class="brand">
+    <a href="/"><strong>dustopia</strong></a>
+    <span class="sep">/</span>
+    <span class="crumb" id="crumb">configure</span>
+  </div>
+  <div class="head-actions">
+    <button id="themeBtn" class="btn" title="toggle theme">☾ Dark</button>
+    <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
+    <div id="walletPill" class="wallet-pill hidden">
+      <span class="dot"></span>
+      <span class="name" id="walletProviderName"></span>
+      <span id="addrShort">0x…</span>
+      <button id="disconnectBtn" class="btn" style="padding:2px 8px; font-size:10px;">×</button>
+    </div>
+  </div>
+</header>
+
+<main id="app">
+  <!-- views are rendered here by the JS router -->
+</main>
+
+<script>
+  // ───────────────────────────────────────────────────────────────
+  // SAFE STORAGE — sandboxed contexts (rare for /configure but
+  // belt-and-braces) sometimes throw on localStorage access.
+  // Mirrors the helper in index.html.
+  // ───────────────────────────────────────────────────────────────
+  window.safeStorage = (function() {
+    let mem = {};
+    try {
+      const k = '__t';
+      localStorage.setItem(k, k); localStorage.removeItem(k);
+      return {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+        del: (k) => { try { localStorage.removeItem(k); } catch { delete mem[k]; } },
+      };
+    } catch {
+      return {
+        get: (k) => mem[k] ?? null,
+        set: (k, v) => { mem[k] = v; },
+        del: (k) => { delete mem[k]; },
+      };
+    }
+  })();
+
+  // Apply persisted theme BEFORE first paint. Default = light.
+  (function() {
+    const saved = safeStorage.get('franken-theme');
+    if (saved === 'dark') document.body.classList.remove('light');
+    else                  document.body.classList.add('light');
+  })();
+</script>
+<script>
+// ════════════════════════════════════════════════════════════════
+// configure.html — owner-gated editor for Dustopia tokens
+//
+// Routes:
+//   /configure          → list of dustopia tokens owned by the
+//                          connected wallet (click → /configure/<id>)
+//   /configure/<id>     → editor for that specific token
+//
+// State machine (drives view in <main id="app">):
+//   disconnected      → wallet picker
+//   connected:list    → owned-tokens grid
+//   connected:editor  → split layout (preview iframe + selection)
+//
+// Auth model: nothing here is privileged on its own. Reads (/api/owned,
+// /api/wallet, /api/config GET) are public. Save (/api/config PUT) is
+// owner-gated server-side via personal_sign over a SIWE-style message;
+// the Worker verifies signer == ownerOf(tokenId) live before writing.
+// ════════════════════════════════════════════════════════════════
+
+// Same backend as the main site — no second deploy target.
+const API_URL = 'https://api.dustopia.xyz';
+
+// Module-level state.
+const state = {
+  view: 'disconnected',          // 'disconnected' | 'list' | 'editor'
+  providers: [],                 // EIP-6963 announcements
+  activeProvider: null,          // chosen wallet's EIP-1193 provider
+  activeProviderInfo: null,      // { name, icon, rdns }
+  address: null,                 // 0x... lowercase
+  ownedTokenIds: [],             // strings, decimal
+  tokenId: null,                 // current /configure/<id> token
+};
+
+// ── Utilities ──────────────────────────────────────────────────
+function $(sel)        { return document.querySelector(sel); }
+function setText(sel, text) { const el = $(sel); if (el) el.textContent = text; }
+function show(sel)     { const el = $(sel); if (el) el.classList.remove('hidden'); }
+function hide(sel)     { const el = $(sel); if (el) el.classList.add('hidden'); }
+function shortAddr(a)  { return a ? `${a.slice(0,6)}…${a.slice(-4)}` : ''; }
+function esc(s)        {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+// ── Theme toggle (mirrors main site) ───────────────────────────
+$('#themeBtn').addEventListener('click', () => {
+  const isLight = document.body.classList.toggle('light');
+  safeStorage.set('franken-theme', isLight ? 'light' : 'dark');
+  $('#themeBtn').textContent = isLight ? '☾ Dark' : '☀ Light';
+});
+$('#themeBtn').textContent = document.body.classList.contains('light') ? '☾ Dark' : '☀ Light';
+
+// ── Routing ───────────────────────────────────────────────────
+// Path-based: /configure → list, /configure/<id> → editor.
+// Cloudflare Pages serves configure.html for both via _redirects.
+function parseRoute() {
+  const m = location.pathname.match(/^\/configure\/(\d{1,78})\/?$/);
+  return m ? { kind: 'editor', tokenId: m[1] } : { kind: 'list' };
+}
+function go(path) {
+  history.pushState(null, '', path);
+  render();
+}
+window.addEventListener('popstate', render);
+
+// ── Top-level render dispatcher ───────────────────────────────
+function render() {
+  const route = parseRoute();
+  state.tokenId = route.kind === 'editor' ? route.tokenId : null;
+  setText('#crumb', route.kind === 'editor' ? `configure / #${route.tokenId}` : 'configure');
+
+  // Leaving the editor view? Cancel any pending preview-push debounce so
+  // it doesn't fire after the iframe is gone (would no-op on null #ifr,
+  // but the timer would still hold a callback in memory).
+  const isEditorRoute = route.kind === 'editor';
+  if (!isEditorRoute && editor.pushTimer) {
+    clearTimeout(editor.pushTimer);
+    editor.pushTimer = null;
+  }
+
+  if (!state.address) {
+    state.view = 'disconnected';
+    renderDisconnected();
+    return;
+  }
+  if (route.kind === 'list') {
+    state.view = 'list';
+    renderTokenList();
+    return;
+  }
+  state.view = 'editor';
+  startEditorIfNeeded();   // kicks off async load + initial mountEditor
+}
+
+// ── Render: disconnected ─────────────────────────────────────
+function renderDisconnected() {
+  const main = $('#app');
+  const wallets = state.providers.length
+    ? state.providers.map((p, i) => `
+        <button class="wallet-option" data-i="${i}">
+          ${p.info.icon ? `<img src="${esc(p.info.icon)}" alt="">` : '<span style="width:24px"></span>'}
+          <span class="label">${esc(p.info.name)}</span>
+          <span class="arrow">→</span>
+        </button>`).join('')
+    : `<p class="hint">No wallets detected. Install <a href="https://metamask.io" target="_blank" style="color:inherit;text-decoration:underline">MetaMask</a>, <a href="https://rabby.io" target="_blank" style="color:inherit;text-decoration:underline">Rabby</a>, or <a href="https://www.coinbase.com/wallet" target="_blank" style="color:inherit;text-decoration:underline">Coinbase Wallet</a> and reload this page.</p>`;
+  main.innerHTML = `
+    <div class="empty-state">
+      <h2>Configure your dustopia</h2>
+      <p>Connect the wallet that owns the token to pick which NFTs go into the sphere. Your selection is signed locally and saved to the on-chain artwork.</p>
+      <div class="wallet-list">${wallets}</div>
+    </div>`;
+  main.querySelectorAll('.wallet-option').forEach(btn => {
+    btn.addEventListener('click', () => connectWallet(parseInt(btn.dataset.i, 10)));
+  });
+}
+
+// ── Render: token list (after connect) ───────────────────────
+function renderTokenList() {
+  const main = $('#app');
+  if (!state.ownedTokenIds.length) {
+    main.innerHTML = `
+      <div class="empty-state">
+        <h2>No dustopia tokens in this wallet</h2>
+        <p>Connect a different wallet, or mint a token first via the OpenSea drop page.</p>
+      </div>`;
+    return;
+  }
+  main.innerHTML = `
+    <div class="section-title">Your dustopia tokens (${state.ownedTokenIds.length})</div>
+    <div class="token-grid" id="tokenGrid"></div>`;
+  const grid = $('#tokenGrid');
+  for (const id of state.ownedTokenIds) {
+    const card = document.createElement('button');
+    card.className = 'token-card';
+    card.innerHTML = `
+      <div class="id">Dustopia #${esc(id)}</div>
+      <div class="sub">tap to edit selection</div>
+      <div class="row">
+        <span class="sub" id="cfg-${esc(id)}">…</span>
+        <span class="edit-link">Edit →</span>
+      </div>`;
+    card.addEventListener('click', () => go(`/configure/${id}`));
+    grid.appendChild(card);
+    // Lazy fetch of saved-config summary per card.
+    fetch(`${API_URL}/api/config/${id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(cfg => {
+        if (!cfg) return;
+        const sel = cfg.selection || { mode: 'all' };
+        const span = document.getElementById(`cfg-${id}`);
+        if (!span) return;
+        if (sel.mode === 'all') {
+          span.textContent = 'all NFTs (default)';
+        } else {
+          const cols = (sel.collections || []).length;
+          const tks  = (sel.tokens || []).length;
+          span.textContent = `subset · ${cols} collections, ${tks} tokens`;
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// EDITOR
+// ────────────────────────────────────────────────────────────
+// editor state lives at module scope so re-renders don't lose it.
+const editor = {
+  tokenId:        null,
+  config:         null,                  // saved selection (or default)
+  byCollection:   new Map(),             // contract -> { name, tokens: [{tokenId, image, name}] }
+  collectionsList:[],                    // ordered contracts, used for stable rendering
+  mode:           'all',
+  selected:       new Set(),             // "contract:tokenId"
+  expanded:       new Set(),             // expanded contract addrs
+  searchQuery:    '',
+  loading:        false,
+  saving:         false,
+  iframeReady:    false,
+  iframeStale:    false,
+  pushTimer:      null,
+};
+
+// Map a single Alchemy NFT object to its display row.
+function asTokenRow(n) {
+  const id = (n.tokenId != null) ? String(n.tokenId) : '';
+  const img = (n.image && (n.image.thumbnailUrl || n.image.cachedUrl || n.image.pngUrl)) || '';
+  const nm  = (n.name || '').trim() || `#${id}`;
+  return { tokenId: id, image: img, name: nm };
+}
+
+// Walk the wallet through /api/wallet (paginated). Aborts after MAX_PAGES.
+async function fetchEntireWallet(addr) {
+  const out = [];
+  let pageKey = null;
+  const MAX_PAGES = 60;
+  for (let p = 0; p < MAX_PAGES; p++) {
+    const u = new URL(`${API_URL}/api/wallet/${addr}`);
+    if (pageKey) u.searchParams.set('pageKey', pageKey);
+    const r = await fetch(u);
+    if (!r.ok) throw new Error(`wallet HTTP ${r.status}`);
+    const j = await r.json();
+    if (Array.isArray(j.ownedNfts)) out.push(...j.ownedNfts);
+    if (!j.pageKey) break;
+    pageKey = j.pageKey;
+  }
+  return out;
+}
+
+// Group NFTs by their contract address. Keeps the order in which they
+// first appear in the wallet response so the UI is stable across loads.
+function groupByCollection(nfts) {
+  const map = new Map();
+  for (const n of nfts) {
+    if (!n || !n.contract || !n.contract.address) continue;
+    if (n.isSpam) continue;
+    const c = n.contract.address.toLowerCase();
+    if (!map.has(c)) {
+      map.set(c, {
+        contract: c,
+        name:     (n.contract.name || '').trim() || c.slice(0, 10) + '…',
+        tokens:   [],
+      });
+    }
+    const row = asTokenRow(n);
+    if (!row.tokenId) continue;
+    map.get(c).tokens.push(row);
+  }
+  return map;
+}
+
+// Pre-fill `selected` from the saved-config selection blob. Collections in
+// `selection.collections` get every token of that contract pre-checked
+// (so the UI stays consistent with how the renderer will treat the cfg).
+//
+// Defensively filters out entries whose contract isn't in the wallet
+// today: a config saved when the holder owned a token they later sold
+// would otherwise show a phantom checked checkbox in the tree, only for
+// serializeSelection to silently drop it at save time. Better to make
+// the UI honest about what's actually selectable.
+function hydrateSelected(byCollection, selection) {
+  const sel = new Set();
+  if (!selection || selection.mode !== 'subset') return sel;
+  const cols = new Set((selection.collections || []).map(s => String(s).toLowerCase()));
+  const tks  = new Set((selection.tokens      || []).map(t => `${String(t.contract).toLowerCase()}:${t.tokenId}`));
+  for (const [contract, info] of byCollection) {
+    if (cols.has(contract)) {
+      for (const t of info.tokens) sel.add(`${contract}:${t.tokenId}`);
+    }
+    // Per-token entries: only add if the token is still in the wallet.
+    for (const t of info.tokens) {
+      const k = `${contract}:${t.tokenId}`;
+      if (tks.has(k)) sel.add(k);
+    }
+  }
+  return sel;
+}
+
+// Inverse of hydrate: build the storage shape from the live selected Set.
+// Contracts where every token is selected → `collections[]`, others →
+// individual `tokens[]` entries. mode=all is special-cased.
+function serializeSelection(byCollection, selected, mode) {
+  if (mode === 'all') return { mode: 'all', collections: [], tokens: [] };
+  const collections = [];
+  const tokens = [];
+  for (const [contract, info] of byCollection) {
+    const selOfThis = info.tokens.filter(t => selected.has(`${contract}:${t.tokenId}`));
+    if (!selOfThis.length) continue;
+    if (selOfThis.length === info.tokens.length) {
+      collections.push(contract);
+    } else {
+      for (const t of selOfThis) tokens.push({ contract, tokenId: t.tokenId });
+    }
+  }
+  return { mode: 'subset', collections, tokens };
+}
+
+async function loadEditorData() {
+  editor.loading = true;
+  editor.config = null;
+  editor.byCollection = new Map();
+  editor.collectionsList = [];
+  editor.selected = new Set();
+  editor.expanded = new Set();
+  editor.loadError = null;
+  // Mount the editor shell with a placeholder iframe (no selection yet, so
+  // the iframe boots against the saved config). We swap the iframe src once
+  // we know the canonical hydrated selection — that's at most one extra
+  // load total, and it only happens if the saved cfg differs from default.
+  mountEditor();
+  try {
+    const [cfgRes, walletNfts] = await Promise.all([
+      fetch(`${API_URL}/api/config/${editor.tokenId}`).then(r => r.ok ? r.json() : null),
+      fetchEntireWallet(state.address),
+    ]);
+    editor.config = cfgRes || { tokenId: Number(editor.tokenId), selection: { mode: 'all', collections: [], tokens: [] } };
+    editor.byCollection = groupByCollection(walletNfts);
+    editor.collectionsList = [...editor.byCollection.keys()];
+    editor.mode = editor.config.selection?.mode === 'subset' ? 'subset' : 'all';
+    editor.selected = hydrateSelected(editor.byCollection, editor.config.selection);
+  } catch (e) {
+    console.warn('editor load failed', e);
+    editor.loadError = e.message || 'load failed';
+  } finally {
+    editor.loading = false;
+    refreshSidebar();
+    // Boot the iframe against the hydrated selection. If the saved cfg is
+    // the default mode='all', this does nothing visible — buildInitialPreviewSrc
+    // returned the same selection on mount. For non-default cfgs this swaps
+    // the src to the real subset, replacing the loading-state iframe.
+    const fr = $('#previewFrame');
+    if (fr) {
+      const newSrc = buildInitialPreviewSrc();
+      if (fr.src !== new URL(newSrc, location.href).toString()) {
+        editor.iframeStale = true;
+        $('#previewStale')?.classList.add('show');
+        fr.src = newSrc;
+      }
+    }
+  }
+}
+
+// ── Editor view rendering ────────────────────────────────────
+// Two-phase render to avoid trashing the live preview iframe on every
+// state change:
+//   mountEditor()    — runs once per (token, address) entry. Builds the
+//                       full DOM, including a fresh iframe wired to the
+//                       initial selection. Wires permanent listeners.
+//   refreshSidebar() — runs on every selection change. Only rewrites the
+//                       sidebar's innerHTML, leaves the iframe element
+//                       intact so its sphere-render state survives.
+//
+// Without this split, every checkbox click was destroying the iframe and
+// reloading from a no-?sel= URL, losing both the live-preview frame and
+// each renderEditor() reattaching a new `load` listener (slow leak).
+function buildInitialPreviewSrc() {
+  // Always boot the iframe with the currently-active selection so we get
+  // a single initial load instead of "load default, then reload with sel".
+  const selection = editor.byCollection.size
+    ? serializeSelection(editor.byCollection, editor.selected, editor.mode)
+    : null;
+  const sel = selection ? `&sel=${encodeURIComponent(btoa(JSON.stringify(selection)))}` : '';
+  return `/embed/${state.address}?token=${editor.tokenId}&preview=1${sel}&t=${Date.now()}`;
+}
+
+function mountEditor() {
+  const main = $('#app');
+  const ownsThis = !state.ownedTokenIds.length || state.ownedTokenIds.includes(editor.tokenId);
+  const warnBanner = ownsThis ? '' : `
+    <div class="status-line err" style="margin-bottom:14px;">
+      ⚠ Connected wallet doesn't own Dustopia #${esc(editor.tokenId)}. You can preview, but Save will be rejected.
+    </div>`;
+  main.innerHTML = `
+    <span class="editor-back" id="backBtn">← back to list</span>
+    <div class="editor-title">Editing Dustopia #${esc(editor.tokenId)}</div>
+    ${warnBanner}
+    <div class="editor-grid">
+      <div class="preview-frame">
+        <iframe id="previewFrame" src="${esc(buildInitialPreviewSrc())}"></iframe>
+        <div class="preview-stale" id="previewStale">updating preview…</div>
+      </div>
+      <aside class="editor-side" id="editorSide">
+        ${editor.loading ? '<div class="status-line">loading wallet…</div>' : renderSidebar()}
+      </aside>
+    </div>`;
+  $('#backBtn').addEventListener('click', () => go('/configure'));
+  // Iframe `load` is a fallback signal; the real "rebuild done" comes from
+  // index.html via postMessage 'dustopia:built' once the sphere has
+  // actually painted. We still update iframeReady on load for sanity.
+  const fr = $('#previewFrame');
+  if (fr) {
+    fr.addEventListener('load', () => { editor.iframeReady = true; });
+  }
+  if (!editor.loading) wireSidebar();
+}
+
+// Re-render only the sidebar. Does not touch the iframe.
+function refreshSidebar() {
+  const aside = $('#editorSide');
+  if (!aside) return;
+  aside.innerHTML = renderSidebar();
+  wireSidebar();
+}
+
+function renderSidebar() {
+  if (editor.loadError) {
+    return `<div class="status-line err">load failed: ${esc(editor.loadError)}</div>`;
+  }
+  if (!editor.collectionsList.length) {
+    return `<div class="status-line">No NFTs in this wallet (or all filtered as spam).</div>`;
+  }
+  const subsetActive = editor.mode === 'subset';
+  return `
+    <div class="mode-toggle" id="modeToggle">
+      <button data-mode="all"    class="${editor.mode === 'all'    ? 'active' : ''}">Show all</button>
+      <button data-mode="subset" class="${editor.mode === 'subset' ? 'active' : ''}">Pick subset</button>
+    </div>
+    <input type="text" class="search-input" id="searchInput" placeholder="Search collections / token name…" value="${esc(editor.searchQuery)}">
+    <div class="tree-status" id="treeStatus">${treeStatusText()}</div>
+    <div class="tree ${subsetActive ? '' : 'disabled'}" id="tree">${renderTree()}</div>
+    <div class="save-bar">
+      <span class="summary" id="saveSummary">${saveSummaryText()}</span>
+      <button class="btn btn-primary" id="saveBtn" ${editor.saving ? 'disabled' : ''}>${editor.saving ? 'Signing…' : 'Save'}</button>
+    </div>`;
+}
+
+function treeStatusText() {
+  if (editor.mode === 'all') {
+    return 'In "show all", every NFT in this wallet is rendered. Switch to subset to pick.';
+  }
+  const totalTokens = [...editor.byCollection.values()].reduce((n, c) => n + c.tokens.length, 0);
+  return `${editor.selected.size} / ${totalTokens} tokens selected · ${editor.collectionsList.length} collections in wallet`;
+}
+
+function saveSummaryText() {
+  const ser = serializeSelection(editor.byCollection, editor.selected, editor.mode);
+  if (ser.mode === 'all') return 'render: all NFTs';
+  if (!ser.collections.length && !ser.tokens.length) return 'render: nothing (won\'t save)';
+  const parts = [];
+  if (ser.collections.length) parts.push(`${ser.collections.length} collections`);
+  if (ser.tokens.length)      parts.push(`${ser.tokens.length} tokens`);
+  return `render: ${parts.join(' + ')}`;
+}
+
+function renderTree() {
+  const q = editor.searchQuery.trim().toLowerCase();
+  const out = [];
+  for (const contract of editor.collectionsList) {
+    const info = editor.byCollection.get(contract);
+    const collMatch = !q || info.name.toLowerCase().includes(q) || contract.includes(q);
+    const matchedTokens = q
+      ? info.tokens.filter(t => collMatch || t.name.toLowerCase().includes(q) || t.tokenId.includes(q))
+      : info.tokens;
+    if (q && !collMatch && !matchedTokens.length) continue;
+
+    const total    = info.tokens.length;
+    const selCount = info.tokens.reduce((n, t) => n + (editor.selected.has(`${contract}:${t.tokenId}`) ? 1 : 0), 0);
+    const cbClass  = selCount === 0 ? '' : selCount === total ? 'checked' : 'partial';
+    const isOpen   = editor.expanded.has(contract) || (q && matchedTokens.length);
+
+    out.push(`
+      <div class="col-row${isOpen ? ' expanded' : ''}" data-contract="${esc(contract)}" data-action="toggle-expand">
+        <span class="caret">▸</span>
+        <span class="cb ${cbClass}" data-action="toggle-collection" data-contract="${esc(contract)}"></span>
+        <span class="col-name" title="${esc(contract)}">${esc(info.name)}</span>
+        <span class="col-count">${selCount}/${total}</span>
+      </div>
+      <div class="tk-list" style="${isOpen ? '' : 'display:none'}">
+        ${matchedTokens.map(t => {
+          const k = `${contract}:${t.tokenId}`;
+          const checked = editor.selected.has(k);
+          return `
+            <div class="tk-row" data-action="toggle-token" data-contract="${esc(contract)}" data-token="${esc(t.tokenId)}">
+              <span class="cb ${checked ? 'checked' : ''}"></span>
+              ${t.image ? `<img class="thumb" src="${esc(t.image)}" alt="" loading="lazy">` : '<span class="thumb"></span>'}
+              <span class="tk-name">${esc(t.name)}</span>
+              <span class="tk-id">#${esc(t.tokenId)}</span>
+            </div>`;
+        }).join('')}
+      </div>`);
+  }
+  return out.join('') || '<div class="status-line">No matches.</div>';
+}
+
+function wireSidebar() {
+  $('#modeToggle')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    editor.mode = btn.dataset.mode;
+    refreshSidebar();
+    schedulePushSelection();
+  });
+  $('#searchInput')?.addEventListener('input', (e) => {
+    editor.searchQuery = e.target.value;
+    refreshTreeOnly();
+  });
+  $('#tree')?.addEventListener('click', onTreeClick);
+  $('#saveBtn')?.addEventListener('click', onSaveClick);
+}
+
+function refreshTreeOnly() {
+  const tree = $('#tree');
+  if (tree) tree.innerHTML = renderTree();
+  setText('#treeStatus', treeStatusText());
+  setText('#saveSummary', saveSummaryText());
+}
+
+function onTreeClick(e) {
+  if (editor.mode === 'all') return;
+  const row = e.target.closest('[data-action]');
+  if (!row) return;
+  const action   = row.dataset.action;
+  const contract = row.dataset.contract;
+  if (action === 'toggle-expand') {
+    if (e.target.closest('.cb')) return;             // checkbox handler runs instead
+    if (editor.expanded.has(contract)) editor.expanded.delete(contract);
+    else                               editor.expanded.add(contract);
+    refreshTreeOnly();
+    return;
+  }
+  if (action === 'toggle-collection') {
+    e.stopPropagation();
+    const info = editor.byCollection.get(contract);
+    const allSelected = info.tokens.every(t => editor.selected.has(`${contract}:${t.tokenId}`));
+    for (const t of info.tokens) {
+      const k = `${contract}:${t.tokenId}`;
+      if (allSelected) editor.selected.delete(k);
+      else             editor.selected.add(k);
+    }
+    refreshTreeOnly();
+    schedulePushSelection();
+    return;
+  }
+  if (action === 'toggle-token') {
+    const tokenId = row.dataset.token;
+    const k = `${contract}:${tokenId}`;
+    if (editor.selected.has(k)) editor.selected.delete(k);
+    else                        editor.selected.add(k);
+    refreshTreeOnly();
+    schedulePushSelection();
+    return;
+  }
+}
+
+// ── Live preview iframe sync ─────────────────────────────────
+// Selection updates are pushed to the iframe by reloading it with a new
+// `&sel=<base64-json>` query param. The renderer in index.html decodes it
+// and renders that subset (skipping the saved-config lookup). Reloading
+// is simpler than postMessage hot-rebuild and gives us a clean iframe
+// `load` event to clear the stale indicator.
+function schedulePushSelection(delayMs = 800) {
+  if (editor.pushTimer) clearTimeout(editor.pushTimer);
+  editor.iframeStale = true;
+  $('#previewStale')?.classList.add('show');
+  editor.pushTimer = setTimeout(pushSelectionToIframe, delayMs);
+}
+function pushSelectionToIframe() {
+  const fr = $('#previewFrame');
+  if (!fr) return;
+  const selection = serializeSelection(editor.byCollection, editor.selected, editor.mode);
+  const sel = btoa(JSON.stringify(selection));
+  fr.src = `/embed/${state.address}?token=${editor.tokenId}&preview=1&sel=${encodeURIComponent(sel)}&t=${Date.now()}`;
+  // The iframe will postMessage 'dustopia:built' when its sphere first
+  // paints; the listener below clears the stale badge at that point.
+  // iframe `load` is too early — atlas build adds another 5-10s.
+}
+
+// Listener for the iframe's first-paint signal. Same-origin only — we
+// receive only from our own /embed/ child, never from third-party frames.
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin) return;
+  if (!e.data || typeof e.data !== 'object') return;
+  if (e.data.type === 'dustopia:built') {
+    editor.iframeStale = false;
+    $('#previewStale')?.classList.remove('show');
+  }
+});
+
+// ── Save flow ───────────────────────────────────────────────
+function randomNonce() {
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  return Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function onSaveClick() {
+  if (editor.saving) return;
+  if (!state.activeProvider || !state.address) {
+    alert('Connect a wallet first.');
+    return;
+  }
+  const selection = serializeSelection(editor.byCollection, editor.selected, editor.mode);
+  if (selection.mode === 'subset' && !selection.collections.length && !selection.tokens.length) {
+    alert('Subset is empty — pick at least one token, or switch to "Show all".');
+    return;
+  }
+  const message = `Configure Dustopia #${editor.tokenId}\nOwner: ${state.address}\nTimestamp: ${new Date().toISOString()}\nNonce: ${randomNonce()}`;
+  editor.saving = true;
+  refreshSidebar();
+  try {
+    const signature = await state.activeProvider.request({
+      method: 'personal_sign',
+      params: [message, state.address],
+    });
+    const r = await fetch(`${API_URL}/api/config/${editor.tokenId}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ config: { selection }, message, signature }),
+    });
+    if (!r.ok) {
+      const detail = await r.text().catch(() => '');
+      throw new Error(`save failed (HTTP ${r.status}) ${detail}`);
+    }
+    // Success — flash a confirm + force the preview iframe to reload
+    // through the standard config path (so what we see on /configure
+    // matches what OpenSea will fetch on its next refresh).
+    editor.saving = false;
+    refreshSidebar();
+    const fr = $('#previewFrame');
+    if (fr) fr.src = `/embed/${state.address}?token=${editor.tokenId}&preview=1&t=${Date.now()}`;
+    $('#saveSummary').textContent = '✓ saved · ' + saveSummaryText();
+  } catch (e) {
+    editor.saving = false;
+    refreshSidebar();
+    alert(`Save failed: ${e && e.message ? e.message : 'unknown'}`);
+  }
+}
+
+// ── Render: editor entry point ───────────────────────────────
+function startEditorIfNeeded() {
+  if (state.view !== 'editor') return;
+  // Same token, already loaded → re-mount the shell (the user came back
+  // from the list view, the DOM was wiped). The selection state in
+  // `editor.selected` survives across navigations so the iframe boots
+  // with the live draft, not the saved config.
+  if (editor.tokenId === state.tokenId && !editor.loading) {
+    mountEditor();
+    return;
+  }
+  editor.tokenId = state.tokenId;
+  loadEditorData();   // mounts shell with loading state, then refreshes
+                      // sidebar + boots iframe against hydrated selection.
+}
+
+// ── Wallet discovery (EIP-6963 + window.ethereum fallback) ───
+// EIP-6963 lets multiple wallets coexist on the same page without
+// fighting over window.ethereum. We dispatch the request, then any
+// installed wallet replies with announceProvider. Legacy wallets
+// without 6963 still expose window.ethereum and we fall back to it.
+function discoverWallets() {
+  state.providers = [];
+  const onAnnounce = (e) => {
+    if (e.detail && e.detail.provider && e.detail.info) {
+      state.providers.push({ info: e.detail.info, provider: e.detail.provider });
+    }
+  };
+  window.addEventListener('eip6963:announceProvider', onAnnounce);
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  return new Promise(resolve => {
+    setTimeout(() => {
+      window.removeEventListener('eip6963:announceProvider', onAnnounce);
+      // Legacy fallback: if nothing announced and window.ethereum exists,
+      // present it as a generic option. Modern wallets all support 6963 so
+      // this rarely fires.
+      if (!state.providers.length && window.ethereum) {
+        state.providers.push({
+          info: { name: 'Browser Wallet', icon: '', rdns: 'legacy' },
+          provider: window.ethereum,
+        });
+      }
+      resolve();
+    }, 250);
+  });
+}
+
+// ── Connect / disconnect ─────────────────────────────────────
+async function connectWallet(idx) {
+  const entry = state.providers[idx];
+  if (!entry) return;
+  try {
+    const accounts = await entry.provider.request({ method: 'eth_requestAccounts' });
+    const addr = (accounts && accounts[0] || '').toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(addr)) throw new Error('no account');
+    state.activeProvider     = entry.provider;
+    state.activeProviderInfo = entry.info;
+    state.address            = addr;
+    safeStorage.set('dustopia-wallet-rdns', entry.info.rdns || '');
+    safeStorage.set('dustopia-wallet-addr', addr);
+    // React to account swaps in the wallet: the user may switch addresses
+    // mid-session. We re-load the owned-tokens list and bounce them back
+    // to the list view so they don't accidentally try to save under the
+    // wrong owner (the Worker would reject anyway, but UX is cleaner).
+    if (entry.provider.on && !entry.provider.__dustopiaWired) {
+      entry.provider.__dustopiaWired = true;
+      entry.provider.on('accountsChanged', (accs) => {
+        // The provider listener is attached once and survives our own
+        // disconnect (we have no way to remove it because we don't keep
+        // a stable reference). Skip handling if the user is currently
+        // disconnected — otherwise switching accounts in the wallet
+        // extension would silently re-connect us.
+        if (!state.activeProvider) return;
+        const next = ((accs && accs[0]) || '').toLowerCase();
+        if (!next) { disconnect(); return; }
+        state.address = next;
+        safeStorage.set('dustopia-wallet-addr', next);
+        showWalletPill();
+        loadOwnedTokens().then(() => {
+          go('/configure');
+        });
+      });
+      entry.provider.on('chainChanged', () => { /* mainnet only — ignore */ });
+    }
+    showWalletPill();
+    await loadOwnedTokens();
+    render();
+  } catch (e) {
+    console.warn('connect failed', e);
+    alert(`Connect failed: ${e && e.message ? e.message : 'unknown'}`);
+  }
+}
+
+function disconnect() {
+  state.activeProvider     = null;
+  state.activeProviderInfo = null;
+  state.address            = null;
+  state.ownedTokenIds      = [];
+  safeStorage.del('dustopia-wallet-rdns');
+  safeStorage.del('dustopia-wallet-addr');
+  hide('#walletPill');
+  show('#connectBtn');
+  render();
+}
+$('#disconnectBtn').addEventListener('click', disconnect);
+$('#connectBtn').addEventListener('click', () => {
+  // Without a connected wallet the empty-state already shows the picker;
+  // clicking Connect just re-renders it. With a wallet connected this
+  // button is hidden, so this handler only fires from the disconnected
+  // state when the user re-clicks the header CTA.
+  state.address = null;
+  render();
+});
+
+function showWalletPill() {
+  hide('#connectBtn');
+  show('#walletPill');
+  setText('#walletProviderName', state.activeProviderInfo?.name || 'wallet');
+  setText('#addrShort', shortAddr(state.address));
+}
+
+// ── Reconnect on reload (silent) ─────────────────────────────
+async function tryReconnect() {
+  const savedAddr = safeStorage.get('dustopia-wallet-addr');
+  const savedRdns = safeStorage.get('dustopia-wallet-rdns');
+  if (!savedAddr || !savedRdns) return;
+  // Find the same wallet among announcements.
+  const entry = state.providers.find(p => p.info.rdns === savedRdns) || state.providers[0];
+  if (!entry) return;
+  try {
+    // eth_accounts (no prompt) returns already-permitted accounts.
+    const accounts = await entry.provider.request({ method: 'eth_accounts' });
+    const addr = (accounts && accounts[0] || '').toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(addr) || addr !== savedAddr.toLowerCase()) {
+      safeStorage.del('dustopia-wallet-rdns');
+      safeStorage.del('dustopia-wallet-addr');
+      return;
+    }
+    state.activeProvider     = entry.provider;
+    state.activeProviderInfo = entry.info;
+    state.address            = addr;
+    showWalletPill();
+    await loadOwnedTokens();
+  } catch {/* ignore — user can manually re-connect */}
+}
+
+// ── Owned tokens fetch ───────────────────────────────────────
+async function loadOwnedTokens() {
+  if (!state.address) return;
+  try {
+    const r = await fetch(`${API_URL}/api/owned/${state.address}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    state.ownedTokenIds = Array.isArray(j.tokenIds) ? j.tokenIds : [];
+  } catch (e) {
+    console.warn('owned fetch failed', e);
+    state.ownedTokenIds = [];
+  }
+}
+
+// ── Boot ─────────────────────────────────────────────────────
+(async function main() {
+  await discoverWallets();
+  await tryReconnect();
+  render();
+})();
+</script>
+</body>
+</html>
