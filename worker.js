@@ -777,6 +777,308 @@ async function handleAtlas(addr, request, env, ctx) {
   return errorResponse(405, 'method not allowed', request);
 }
 
+// =====================================================================
+// PER-TOKEN CONFIG — stored in R2 under config/<tokenId>.json. Owner-gated
+// PUT (verified via EIP-191 personal_sign) lets the holder pick which of
+// their NFTs go into the sphere; without a config the renderer falls back
+// to "show everything in the wallet". A separate Alchemy Notify webhook
+// hits /api/webhook/transfer to wipe the config when the token changes
+// hands, so a new owner never inherits the previous owner's selection.
+//
+// Config schema (all fields required):
+//   {
+//     "tokenId":     1,
+//     "ownerAtSave": "0x014c...",
+//     "savedAt":     1714123456,
+//     "selection":   {
+//       "mode":        "all" | "subset",
+//       "collections": ["0xcontract1", ...],            // contract addrs
+//       "tokens":      [{"contract": "0x...", "tokenId": "..."}]
+//     }
+//   }
+//
+// SIWE-style PUT body (everything required):
+//   {
+//     "config":    { ...config above... },
+//     "message":   "Configure Dustopia #<id>\nOwner: 0x...\n
+//                   Timestamp: <ISO>\nNonce: <hex>",
+//     "signature": "0x..."
+//   }
+//
+// Worker verifies:
+//   1. message regex parses out tokenId / owner / timestamp / nonce
+//   2. tokenId in message matches URL tokenId
+//   3. timestamp ≤ 5 minutes old (replay window)
+//   4. signature recovers to `owner` from message
+//   5. ownerOf(tokenId) on-chain == that owner
+// Then writes config to R2.
+// =====================================================================
+import { verifyMessage, isAddress, getAddress } from 'viem';
+
+const CONFIG_REPLAY_WINDOW_MS = 5 * 60 * 1000;     // 5 min
+const CONFIG_MAX_BYTES = 256 * 1024;               // 256 KiB ceiling on body
+const CONFIG_MAX_COLLECTIONS = 1024;
+const CONFIG_MAX_TOKENS      = 4096;
+
+const CONFIG_SIWE_RE = /^Configure Dustopia #(\d+)\nOwner: (0x[0-9a-fA-F]{40})\nTimestamp: (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\nNonce: ([0-9a-fA-F]{8,64})$/;
+
+function configKey(tokenId) { return `config/${tokenId}.json`; }
+
+// Returns { tokenId, owner, timestamp, nonce } or null if message is malformed.
+function parseSiweMessage(msg) {
+  if (typeof msg !== 'string' || msg.length > 1024) return null;
+  const m = msg.match(CONFIG_SIWE_RE);
+  if (!m) return null;
+  const ts = Date.parse(m[3]);
+  if (!Number.isFinite(ts)) return null;
+  return { tokenId: m[1], owner: m[2].toLowerCase(), timestamp: ts, nonce: m[4] };
+}
+
+// Validates the user-submitted selection blob. Returns the cleaned shape on
+// success (drops unknown fields, lowercases addresses) or null on any
+// structural problem.
+function sanitizeSelection(sel) {
+  if (!sel || typeof sel !== 'object') return null;
+  if (sel.mode !== 'all' && sel.mode !== 'subset') return null;
+  if (sel.mode === 'all') {
+    return { mode: 'all', collections: [], tokens: [] };
+  }
+  // subset: validate collections + tokens arrays
+  const cols = Array.isArray(sel.collections) ? sel.collections : [];
+  const tks  = Array.isArray(sel.tokens)      ? sel.tokens      : [];
+  if (cols.length > CONFIG_MAX_COLLECTIONS) return null;
+  if (tks.length  > CONFIG_MAX_TOKENS)      return null;
+  const collections = [];
+  for (const c of cols) {
+    if (typeof c !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(c)) return null;
+    collections.push(c.toLowerCase());
+  }
+  const tokens = [];
+  for (const t of tks) {
+    if (!t || typeof t !== 'object') return null;
+    if (typeof t.contract !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(t.contract)) return null;
+    if (typeof t.tokenId !== 'string'  || !/^\d+$/.test(t.tokenId) || t.tokenId.length > 78) return null;
+    tokens.push({ contract: t.contract.toLowerCase(), tokenId: t.tokenId });
+  }
+  return { mode: 'subset', collections, tokens };
+}
+
+async function handleConfigGet(tokenId, request, env) {
+  const obj = await env.ATLAS.get(configKey(tokenId));
+  if (!obj) {
+    // Default config = render full wallet. Returned with 200 so the frontend
+    // doesn't have to special-case 404 — a missing config and a saved
+    // mode:"all" config behave identically.
+    return jsonResponse({ tokenId: Number(tokenId), selection: { mode: 'all', collections: [], tokens: [] } }, request, {
+      headers: { 'Cache-Control': 'public, max-age=30' },
+    });
+  }
+  let body;
+  try { body = await obj.text(); }
+  catch { return errorResponse(500, 'config read failed', request); }
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type':                'application/json; charset=utf-8',
+      ...corsHeaders(request),
+      'Cache-Control':               'public, max-age=30',
+    },
+  });
+}
+
+async function handleConfigPut(tokenId, request, env) {
+  // Strict body cap — config payloads are tiny (a few KB at most).
+  const lenHdr = request.headers.get('Content-Length');
+  if (!lenHdr) return errorResponse(411, 'Content-Length required', request);
+  const len = parseInt(lenHdr, 10);
+  if (!Number.isFinite(len) || len < 0) return errorResponse(400, 'invalid Content-Length', request);
+  if (len > CONFIG_MAX_BYTES) return errorResponse(413, `body too large (${len} > ${CONFIG_MAX_BYTES})`, request);
+  if (len === 0) return errorResponse(400, 'empty body', request);
+
+  let payload;
+  try { payload = await request.json(); }
+  catch { return errorResponse(400, 'body is not valid JSON', request); }
+  if (!payload || typeof payload !== 'object') return errorResponse(400, 'body must be a JSON object', request);
+  const { config, message, signature } = payload;
+  if (!config || typeof message !== 'string' || typeof signature !== 'string') {
+    return errorResponse(400, 'missing config / message / signature', request);
+  }
+  if (!/^0x[0-9a-fA-F]{130,132}$/.test(signature)) {
+    return errorResponse(400, 'malformed signature', request);
+  }
+
+  // 1. Parse the SIWE message and verify its claims line up with the request.
+  const parsed = parseSiweMessage(message);
+  if (!parsed) return errorResponse(400, 'malformed message', request);
+  if (parsed.tokenId !== tokenId) return errorResponse(400, 'message tokenId mismatch', request);
+  const ageMs = Date.now() - parsed.timestamp;
+  if (ageMs < -60_000 || ageMs > CONFIG_REPLAY_WINDOW_MS) {
+    return errorResponse(401, 'message timestamp outside replay window', request);
+  }
+
+  // 2. Verify the signature actually came from `parsed.owner`.
+  let okSig;
+  try {
+    okSig = await verifyMessage({ address: getAddress(parsed.owner), message, signature });
+  } catch {
+    return errorResponse(401, 'signature verification failed', request);
+  }
+  if (!okSig) return errorResponse(401, 'signature does not match owner', request);
+
+  // 3. Verify the signer is the *current* owner on-chain. Don't trust the
+  //    cached owner lookup — go straight to source. (lookupOwner uses 5min
+  //    KV cache which would let a recently-sold-from owner re-sign here.)
+  //    We do it inline rather than calling lookupOwner so the result isn't
+  //    cached against future PUTs from the new owner.
+  const currentOwner = await fetchOwnerFresh(tokenId, env);
+  if (!currentOwner) return errorResponse(502, 'could not verify on-chain owner', request);
+  if (currentOwner !== parsed.owner) {
+    return errorResponse(403, 'signer is not the current owner', request);
+  }
+
+  // 4. Sanitize the selection blob. Caps array sizes, lowercases addresses.
+  const cleanSelection = sanitizeSelection(config.selection);
+  if (!cleanSelection) return errorResponse(400, 'invalid selection shape', request);
+
+  const stored = {
+    tokenId:     Number(tokenId),
+    ownerAtSave: parsed.owner,
+    savedAt:     Math.floor(Date.now() / 1000),
+    selection:   cleanSelection,
+  };
+  await env.ATLAS.put(configKey(tokenId), JSON.stringify(stored), {
+    httpMetadata: { contentType: 'application/json; charset=utf-8' },
+  });
+  return jsonResponse({ ok: true, savedAt: stored.savedAt }, request);
+}
+
+async function handleConfig(rawTokenId, request, env, ctx) {
+  const tokenId = String(rawTokenId).replace(/\.json$/i, '');
+  if (!/^\d+$/.test(tokenId) || tokenId.length > 78) {
+    return errorResponse(400, 'invalid token id', request);
+  }
+  if (request.method === 'GET')    return handleConfigGet(tokenId, request, env);
+  if (request.method === 'PUT')    return handleConfigPut(tokenId, request, env);
+  if (request.method === 'DELETE') {
+    // Internal-only via webhook; reject direct calls to avoid griefing.
+    return errorResponse(405, 'use /api/webhook/transfer', request);
+  }
+  return errorResponse(405, 'method not allowed', request);
+}
+
+// Bypass the OWNER_TTL KV cache so the verification step in PUT can't be
+// fooled by stale ownership. Same encoding as lookupOwner but no cache R/W.
+async function fetchOwnerFresh(tokenId, env) {
+  const paddedId = BigInt(tokenId).toString(16).padStart(64, '0');
+  const data = '0x6352211e' + paddedId;
+  const url = `https://eth-mainnet.g.alchemy.com/v2/${env.ALCHEMY_KEY}`;
+  let json;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ALCH_TIMEOUT_MS);
+    const r = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call',
+                                params: [{ to: NFT_CONTRACT, data }, 'latest'] }),
+      signal:  ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    json = await r.json();
+  } catch { return null; }
+  if (json.error || !json.result || json.result === '0x') return null;
+  const owner = ('0x' + json.result.slice(-40)).toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(owner) || owner === '0x' + '00'.repeat(20)) return null;
+  return owner;
+}
+
+// =====================================================================
+// ALCHEMY WEBHOOK — receives Transfer events from our NFT contract and
+// wipes the per-token config so the new owner doesn't inherit the old
+// owner's selection. Authenticated by HMAC-SHA256 over the raw body using
+// the signing key Alchemy gives us at webhook creation time. Stored as a
+// Worker secret WEBHOOK_SECRET (set via `wrangler secret put`).
+// =====================================================================
+
+async function verifyAlchemySignature(rawBody, signatureHex, secret) {
+  if (!secret || typeof signatureHex !== 'string' || !/^[0-9a-f]{64}$/i.test(signatureHex)) return false;
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(rawBody));
+  const computed = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+  // Constant-time-ish compare.
+  if (computed.length !== signatureHex.length) return false;
+  let diff = 0;
+  for (let i = 0; i < computed.length; i++) {
+    diff |= computed.charCodeAt(i) ^ signatureHex.toLowerCase().charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+async function handleWebhookTransfer(request, env, ctx) {
+  if (request.method !== 'POST') return errorResponse(405, 'method not allowed', request);
+  const sigHeader = request.headers.get('X-Alchemy-Signature') || '';
+  // Read body as text so we can both HMAC-verify and JSON-parse it.
+  const rawBody = await request.text();
+  if (rawBody.length > CONFIG_MAX_BYTES * 4) {
+    return errorResponse(413, 'webhook body too large', request);
+  }
+  if (!env.WEBHOOK_SECRET) {
+    return errorResponse(500, 'WEBHOOK_SECRET not configured', request);
+  }
+  const ok = await verifyAlchemySignature(rawBody, sigHeader, env.WEBHOOK_SECRET);
+  if (!ok) return errorResponse(401, 'bad webhook signature', request);
+
+  let body;
+  try { body = JSON.parse(rawBody); }
+  catch { return errorResponse(400, 'webhook body is not JSON', request); }
+
+  // Alchemy Address Activity webhook payload (v3 format) carries an array of
+  // activity items under event.activity. We only care about ERC-721
+  // transfers from our NFT contract — extract their tokenIds and DELETE
+  // the corresponding config keys. Format may evolve; we defend by
+  // checking each field's shape rather than assuming structure.
+  const activities = (body && body.event && Array.isArray(body.event.activity))
+    ? body.event.activity : [];
+  const tokenIds = new Set();
+  for (const act of activities) {
+    if (!act || typeof act !== 'object') continue;
+    if ((act.category || '').toLowerCase() !== 'erc721') continue;
+    const contract = (act.rawContract && act.rawContract.address) || act.contractAddress || '';
+    if (typeof contract !== 'string' || contract.toLowerCase() !== NFT_CONTRACT.toLowerCase()) continue;
+    // Token id arrives as hex string ("0x1") in some payloads, decimal in others.
+    const idRaw = act.erc721TokenId || (act.rawContract && act.rawContract.tokenId) || act.tokenId;
+    if (typeof idRaw !== 'string') continue;
+    let idDec;
+    try {
+      idDec = idRaw.startsWith('0x') ? BigInt(idRaw).toString(10) : BigInt(idRaw).toString(10);
+    } catch { continue; }
+    if (!/^\d+$/.test(idDec) || idDec.length > 78) continue;
+    tokenIds.add(idDec);
+  }
+  if (!tokenIds.size) return jsonResponse({ ok: true, cleared: 0 }, request);
+
+  const ids = [...tokenIds];
+  // Fire-and-forget the deletes via waitUntil so we ack the webhook fast
+  // (Alchemy retries on slow responses).
+  if (ctx) {
+    ctx.waitUntil(Promise.all(ids.map(id => env.ATLAS.delete(configKey(id)).catch(() => {}))));
+  } else {
+    await Promise.all(ids.map(id => env.ATLAS.delete(configKey(id)).catch(() => {})));
+  }
+  // Also clear the per-token owner KV cache so the next metadata fetch
+  // sees the new owner immediately (without waiting OWNER_TTL).
+  if (ctx) {
+    ctx.waitUntil(Promise.all(ids.map(id =>
+      env.WALLET_CACHE.delete(`owner:${NFT_CONTRACT.toLowerCase()}:${id}`).catch(() => {})
+    )));
+  }
+  return jsonResponse({ ok: true, cleared: ids.length, tokenIds: ids }, request);
+}
+
 export default {
   async fetch(request, env, ctx) {
     // CORS preflight
@@ -808,6 +1110,26 @@ export default {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handlePreviewCap(previewCapMatch[1], request, env, ctx);
+    }
+
+    // Per-token config: GET is public, PUT is owner-gated via signature.
+    // Routed before the global GET-only check because PUT is allowed.
+    const configMatch = path.match(/^\/api\/config\/([^/]+)\/?$/);
+    if (configMatch) {
+      if (!(await rateLimitOk(request, env))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      return handleConfig(configMatch[1], request, env, ctx);
+    }
+
+    // Alchemy webhook: HMAC-authed POST that fires on any Transfer event of
+    // our NFT contract. We use it to wipe the per-token config so the new
+    // owner never inherits the prior owner's selection. POST-only by design.
+    if (path === '/api/webhook/transfer') {
+      // Webhook traffic is bounded by Alchemy's retry policy and HMAC-gated,
+      // so it's exempt from per-IP rate limiting (Alchemy's IP would burn
+      // the bucket on a deploy that triggers a backlog).
+      return handleWebhookTransfer(request, env, ctx);
     }
 
     if (request.method !== 'GET') {
