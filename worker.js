@@ -154,6 +154,60 @@ async function handleEns(name, request, env) {
   return jsonResponse(body, request, { headers: { 'X-Cache': 'MISS' } });
 }
 
+// =====================================================================
+// NFT METADATA — what marketplaces (OpenSea, kinds) call via tokenURI()
+// =====================================================================
+// The drop contract's baseURI is set to https://api.dustopia.xyz/api/metadata/
+// so tokenURI(N) becomes /api/metadata/N. We respond with a standard ERC-721
+// metadata JSON whose animation_url loads the live sphere of the token's
+// current owner.
+//
+// FIRST-ITERATION SHORTCUT: owner is hardcoded for the single test token on
+// contract 0x8196e52111255d71732c2187F0F8420704417cE6 #1. Once we add an
+// ownerOf() lookup via Alchemy, this gets replaced with a per-id resolution.
+
+const TEST_OWNER_FALLBACK = '0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf';
+const METADATA_TTL = 60;  // marketplaces cache for this many seconds
+
+function metadataResponse(body, request, init = {}) {
+  // Marketplaces fetch from various servers (often server-to-server, no
+  // Origin header). Always allow * for metadata so OpenSea / wallets / dapps
+  // can read it without CORS friction. Short Cache-Control lets owner
+  // changes propagate quickly.
+  return new Response(JSON.stringify(body), {
+    ...init,
+    headers: {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control':              `public, max-age=${METADATA_TTL}`,
+      ...(init.headers || {}),
+    },
+  });
+}
+
+async function handleMetadata(rawTokenId, request, env) {
+  // Some contracts append .json; strip it defensively even though our test
+  // contract (ERC721A) does not.
+  const tokenId = rawTokenId.replace(/\.json$/i, '');
+  if (!/^\d+$/.test(tokenId) || tokenId.length > 78) {
+    return errorResponse(400, 'invalid token id', request);
+  }
+
+  const owner = TEST_OWNER_FALLBACK;
+  const liveUrl = `https://dustopia.xyz/#${owner}`;
+
+  return metadataResponse({
+    name:          `dustopia #${tokenId}`,
+    description:   'Living wallet portrait — every Ethereum address rendered as a 3D sphere of swirling NFT thumbnails. The artwork updates with the holder\'s collection.',
+    image:         'https://dustopia.xyz/preview.png',
+    animation_url: liveUrl,
+    external_url:  liveUrl,
+    attributes:    [
+      { trait_type: 'token_id', value: Number(tokenId) },
+    ],
+  }, request);
+}
+
 export default {
   async fetch(request, env) {
     // CORS preflight
@@ -170,6 +224,15 @@ export default {
     // Health is exempt from rate limiting so monitoring stays cheap.
     if (path === '/api/health') {
       return jsonResponse({ ok: true, ts: Date.now() }, request);
+    }
+
+    // Metadata is hit by marketplaces (often unattended bots) and must stay
+    // available even under load — exempt from per-IP rate limiting. The
+    // upstream cost is zero (we don't call Alchemy here yet) and downstream
+    // browsers see the Cache-Control header.
+    const metaMatch = path.match(/^\/api\/metadata\/([^/]+)\/?$/);
+    if (metaMatch) {
+      return handleMetadata(metaMatch[1], request, env);
     }
 
     if (!(await rateLimitOk(request, env))) {
