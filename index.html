@@ -465,45 +465,122 @@ async function fetchImagesParallelLive(urlLists, concurrency, onProgress) {
   return results;
 }
 
-// Build the prototype's expected (meta, binBuf) from a list of {nft, image} pairs.
-// Layout: binBuf = N * LIVE_TILE * LIVE_TILE * 3 bytes RGB8, contiguous tiles.
-function buildAtlasBinary(pairs) {
-  const N = pairs.length;
+// Build a meta object from {nft} pairs. Cheap; no canvas work.
+function buildAtlasMeta(pairs) {
   const tileSize = LIVE_TILE;
-  // Use a single 2D canvas big enough to hold one tile, redraw + extract per token.
-  const c = document.createElement('canvas');
-  c.width = tileSize; c.height = tileSize;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const tokens = pairs.map(p => ({
+    collection: (p.nft.contract && p.nft.contract.name) || (p.nft.contract && p.nft.contract.address) || 'unknown',
+    tokenId:    p.nft.tokenId != null ? String(p.nft.tokenId) : '',
+  }));
+  return {
+    count:   pairs.length,
+    lods:    [tileSize],
+    offsets: { ['lod' + tileSize]: 0 },
+    tokens,
+  };
+}
+
+// Worker source: drawn-on-main-thread Images can't be transferred, but
+// ImageBitmaps can. Main thread converts each Image → ImageBitmap (parallel
+// via createImageBitmap), transfers them all here, and we do the heavy
+// per-tile drawImage + getImageData on OffscreenCanvas without touching the
+// UI thread. Result: render loop stays at 60 fps even while a 500-token
+// atlas is being stitched. Returns the Uint8Array buffer (zero-copy back).
+const ATLAS_WORKER_SRC = `
+self.onmessage = (e) => {
+  const { bitmaps, tileSize } = e.data;
+  const N = bitmaps.length;
+  const canvas = new OffscreenCanvas(tileSize, tileSize);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const bin = new Uint8Array(N * tileSize * tileSize * 3);
-  const tokens = new Array(N);
   for (let i = 0; i < N; i++) {
-    const { nft, image } = pairs[i];
+    const bmp = bitmaps[i];
     ctx.clearRect(0, 0, tileSize, tileSize);
-    if (image) {
-      try { ctx.drawImage(image, 0, 0, tileSize, tileSize); }
-      catch { /* tainted — leave black */ }
+    if (bmp) {
+      try { ctx.drawImage(bmp, 0, 0, tileSize, tileSize); } catch {}
+      try { bmp.close(); } catch {}
     }
     let rgba;
     try { rgba = ctx.getImageData(0, 0, tileSize, tileSize).data; }
     catch { rgba = new Uint8ClampedArray(tileSize * tileSize * 4); }
-    // strip alpha → RGB into bin at the right offset
     const dst = i * tileSize * tileSize * 3;
     for (let p = 0, q = dst; p < rgba.length; p += 4, q += 3) {
       bin[q]   = rgba[p];
       bin[q+1] = rgba[p+1];
       bin[q+2] = rgba[p+2];
     }
-    const cName = (nft.contract && nft.contract.name) || (nft.contract && nft.contract.address) || 'unknown';
-    const tokenId = (nft.tokenId != null) ? String(nft.tokenId) : '';
-    tokens[i] = { collection: cName, tokenId };
   }
-  const meta = {
-    count: N,
-    lods:  [tileSize],
-    offsets: { ['lod' + tileSize]: 0 },
-    tokens,
-  };
-  return { meta, binBuf: bin.buffer };
+  self.postMessage({ binBuf: bin.buffer }, [bin.buffer]);
+};
+`;
+
+// Off-thread atlas build. Resolves to { meta, binBuf } same as the sync path.
+// Caller must ensure OffscreenCanvas + createImageBitmap are available.
+async function buildAtlasInWorker(pairs) {
+  const tileSize = LIVE_TILE;
+  // Convert HTMLImageElement → ImageBitmap. createImageBitmap is async and
+  // safe to parallelize; null images stay null so worker draws black.
+  const bitmaps = await Promise.all(pairs.map(p =>
+    p.image ? createImageBitmap(p.image).catch(() => null) : null
+  ));
+  const blobUrl = URL.createObjectURL(new Blob([ATLAS_WORKER_SRC], { type: 'application/javascript' }));
+  const worker = new Worker(blobUrl);
+  return new Promise((resolve, reject) => {
+    worker.onmessage = (e) => {
+      worker.terminate();
+      URL.revokeObjectURL(blobUrl);
+      resolve({ meta: buildAtlasMeta(pairs), binBuf: e.data.binBuf });
+    };
+    worker.onerror = (e) => {
+      worker.terminate();
+      URL.revokeObjectURL(blobUrl);
+      reject(e);
+    };
+    // Transfer each bitmap (zero-copy). Filter nulls out of the transfer list.
+    const transferList = bitmaps.filter(b => b);
+    worker.postMessage({ bitmaps, tileSize }, transferList);
+  });
+}
+
+// Synchronous fallback for environments without OffscreenCanvas/Worker
+// (older iOS Safari versions). Identical output, but blocks the main thread
+// for a few seconds on big wallets — UI jitter, not broken.
+function buildAtlasBinary(pairs) {
+  const N = pairs.length;
+  const tileSize = LIVE_TILE;
+  const c = document.createElement('canvas');
+  c.width = tileSize; c.height = tileSize;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const bin = new Uint8Array(N * tileSize * tileSize * 3);
+  for (let i = 0; i < N; i++) {
+    const { image } = pairs[i];
+    ctx.clearRect(0, 0, tileSize, tileSize);
+    if (image) {
+      try { ctx.drawImage(image, 0, 0, tileSize, tileSize); } catch {}
+    }
+    let rgba;
+    try { rgba = ctx.getImageData(0, 0, tileSize, tileSize).data; }
+    catch { rgba = new Uint8ClampedArray(tileSize * tileSize * 4); }
+    const dst = i * tileSize * tileSize * 3;
+    for (let p = 0, q = dst; p < rgba.length; p += 4, q += 3) {
+      bin[q]   = rgba[p];
+      bin[q+1] = rgba[p+1];
+      bin[q+2] = rgba[p+2];
+    }
+  }
+  return { meta: buildAtlasMeta(pairs), binBuf: bin.buffer };
+}
+
+// Pick the off-thread path when supported; otherwise fall back to sync.
+async function buildAtlasAuto(pairs) {
+  const offThreadOk = typeof Worker !== 'undefined'
+                   && typeof OffscreenCanvas !== 'undefined'
+                   && typeof createImageBitmap !== 'undefined';
+  if (offThreadOk) {
+    try { return await buildAtlasInWorker(pairs); }
+    catch (e) { console.warn('atlas worker failed, falling back', e); }
+  }
+  return buildAtlasBinary(pairs);
 }
 
 function setProgress(pct, active) {
@@ -546,6 +623,18 @@ async function tryFetchCachedAtlas(addr) {
   return { meta, binBuf };
 }
 
+// Gzip an ArrayBuffer using the browser's CompressionStream API.
+// Returns null on unsupported browsers (older iOS Safari) so callers can
+// fall back to raw upload — the Worker accepts both.
+async function gzipBuffer(buf) {
+  if (typeof CompressionStream === 'undefined') return null;
+  try {
+    const cs = new CompressionStream('gzip');
+    const stream = new Response(buf).body.pipeThrough(cs);
+    return await new Response(stream).arrayBuffer();
+  } catch { return null; }
+}
+
 // Fire-and-forget upload of a freshly-built atlas. Binary first (the
 // expensive payload), then meta — meta is the "ready" sentinel a future
 // reader checks first, so this ordering guarantees no half-cached state.
@@ -555,11 +644,18 @@ async function uploadAtlas(addr, meta, binBuf) {
   if (!API_URL) return;
   const base = `${API_URL}/api/atlas/${addr}?grid=${GRID}`;
   try {
-    const r1 = await fetch(base, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body:    binBuf,
-    });
+    // Gzip the binary client-side. NFT thumbnail RGB data is moderately
+    // compressible (typically 35-55% reduction), and shipping fewer bytes
+    // both saves R2 egress AND speeds up the very next visitor's GET.
+    // Fall back to raw upload if CompressionStream isn't available.
+    const gz = await gzipBuffer(binBuf);
+    const headers = { 'Content-Type': 'application/octet-stream' };
+    let body = binBuf;
+    if (gz && gz.byteLength < binBuf.byteLength) {
+      body = gz;
+      headers['Content-Encoding'] = 'gzip';
+    }
+    const r1 = await fetch(base, { method: 'PUT', headers, body });
     if (!r1.ok) { console.warn('atlas bin upload', r1.status); return; }
     const r2 = await fetch(base + '&meta=1', {
       method:  'PUT',
@@ -643,7 +739,7 @@ async function buildLiveData(input) {
   if (!pairs.length) throw new Error('all image fetches failed (CORS?)');
   const failed = used.length - pairs.length;
   setStatus(`<span>building atlas (${pairs.length} tokens)…</span>`);
-  const { meta, binBuf } = buildAtlasBinary(pairs);
+  const { meta, binBuf } = await buildAtlasAuto(pairs);
   // Fire-and-forget: persist this atlas to R2 so the next visit (or every
   // OpenSea iframe load on this NFT) hits the cache path above. Awaited
   // upload would block first paint by ~5-30s for large wallets — not worth
