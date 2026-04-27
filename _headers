@@ -3,21 +3,14 @@
 # manage their own response headers in worker.js.
 
 /*
-  # Defense-in-depth XSS hardening. We already escape every dynamic
-  # interpolation via the esc() helper, but CSP catches anything we miss
-  # (or anything that shows up in a future refactor) without needing a
-  # full audit each time.
-  #
-  # 'unsafe-inline' on script-src + style-src is required because
-  # index.html and configure.html are zero-build single-file apps with
-  # inline <script> and <style> blocks. We use a hash-based CSP if/when
-  # we add a build step. img-src allows https: for Alchemy CDN
-  # thumbnails (they live on a few different hosts and rotate).
-  # connect-src restricts XHR to our own backends + the ENS resolver;
-  # this stops any compromised script from exfiltrating data to a third
-  # party. frame-ancestors restricts who can iframe us — OpenSea +
-  # ourselves; this is what makes the /embed view show inside the OpenSea
-  # NFT page without letting random third parties clickjack it.
+  # Defense-in-depth XSS hardening. Dynamic interpolations are escaped via
+  # esc(); CSP is the safety net. 'unsafe-inline' on script-src and
+  # style-src is required because every page is a zero-build single-file
+  # app with inline <script>/<style>. img-src allows https: for the
+  # Alchemy CDN's rotating thumbnail hosts. connect-src locks XHR to our
+  # backends + the ENS resolver. frame-ancestors permits OpenSea (and
+  # subdomains) to iframe /embed without exposing us to third-party
+  # clickjacking.
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' blob:; connect-src 'self' https://api.dustopia.xyz https://api.ensideas.com; frame-src 'self'; frame-ancestors 'self' https://opensea.io https://*.opensea.io https://testnets.opensea.io https://*.seadn.io; base-uri 'self'; form-action 'self'
   Referrer-Policy: strict-origin-when-cross-origin
   X-Content-Type-Options: nosniff

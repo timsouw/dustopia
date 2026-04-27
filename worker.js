@@ -1,31 +1,12 @@
 // =====================================================================
-// Frankenstein API — Cloudflare Worker
-// Proxies Alchemy NFT API + ENS resolution, hides API key, caches in KV.
+// dustopia API Worker
+// Endpoints, bindings, cache TTLs all documented in CLAUDE.md.
 // =====================================================================
-//
-// ENDPOINTS:
-//   GET /api/wallet/<address>?pageKey=<opt>  → Alchemy getNFTsForOwner
-//   GET /api/ens/<name>                       → ENS resolve via ensideas
-//   GET /api/health                           → ping
-//
-// REQUIRED BINDINGS (set in dashboard):
-//   - Environment variable: ALCHEMY_KEY  (the secret API key)
-//   - KV namespace binding: WALLET_CACHE
-//
-// CACHE TTL:
-//   - Wallet pages: 30 minutes (NFT holdings change, but rarely on minute scale)
-//   - ENS resolves: 24 hours (names rarely change)
 
-// CORS: production sites only. Browser direct-navigation and server-to-server
-// callers (curl, marketplace bots) don't send Origin — for those we omit ACAO
-// entirely, which means a same-origin response with no cross-origin promise.
-// Browsers refuse to expose such responses to JS on other origins, so this is
-// safer than the old `*` fallback (which let arbitrary pages read sensitive
-// per-wallet data via fetch).
-//
-// Marketplace-serving endpoints (/api/metadata/, /api/preview/) explicitly
-// override to `*` via metadataResponse / their own headers — they're public
-// by contract and need to be reachable by anonymous bots.
+// CORS allowlist: Browser direct-nav and server-to-server callers (curl,
+// marketplace bots) don't send Origin — for those we omit ACAO entirely.
+// Marketplace-facing endpoints (/api/metadata/, /api/preview/) override to
+// `*` in their own response headers since they're reachable by anonymous bots.
 const ALLOWED_ORIGINS = new Set([
   'https://dustopia.xyz',
   'https://www.dustopia.xyz',
@@ -49,9 +30,7 @@ function corsHeaders(request) {
     // Origin present but disallowed — explicit null blocks JS reads.
     headers['Access-Control-Allow-Origin'] = 'null';
   }
-  // No Origin header (direct nav, curl, server-to-server) → omit ACAO. The
-  // response still arrives, but a browser context with a different Origin
-  // can't expose it to JS without a permissive ACAO header.
+  // No Origin = no ACAO; response arrives but JS in a foreign origin can't read it.
   return headers;
 }
 
