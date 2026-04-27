@@ -739,16 +739,26 @@ async function handleAtlasGet(addr, grid, wantMeta, fp, request, env, ctx) {
 }
 
 async function handleAtlasPut(addr, grid, wantMeta, fp, request, env) {
-  const ct = (request.headers.get('Content-Type') || '').toLowerCase();
-  const expectedCt = wantMeta ? 'application/json' : 'application/octet-stream';
-  if (!ct.startsWith(expectedCt)) {
-    return errorResponse(415, `expected ${expectedCt}`, request);
+  const ct = (request.headers.get('Content-Type') || '').toLowerCase().split(';')[0].trim();
+  // Atlas binaries used to be raw RGB (application/octet-stream, optionally
+  // gzipped via Content-Encoding). We've moved to WebP-encoded 2D atlas
+  // images (image/webp) — same pixel data, ~10× smaller payload because
+  // photographic NFT thumbnails compress well with format-aware codecs.
+  // Both shapes are still accepted on PUT to keep older clients working.
+  const ATLAS_BIN_TYPES = ['application/octet-stream', 'image/webp', 'image/png'];
+  if (wantMeta) {
+    if (!ct.startsWith('application/json')) {
+      return errorResponse(415, 'expected application/json for meta', request);
+    }
+  } else {
+    if (!ATLAS_BIN_TYPES.includes(ct)) {
+      return errorResponse(415, `expected one of ${ATLAS_BIN_TYPES.join(', ')}`, request);
+    }
   }
-  // The frontend may gzip the binary before upload to cut R2 bandwidth in
-  // half; meta is too small to bother. Track the encoding so GET serves
-  // the same Content-Encoding header back and the browser auto-decompresses.
   const ce = (request.headers.get('Content-Encoding') || '').toLowerCase();
-  const isGzipped = !wantMeta && (ce === 'gzip' || ce === 'deflate' || ce === 'br');
+  const isGzipped = !wantMeta && ct === 'application/octet-stream'
+                              && (ce === 'gzip' || ce === 'deflate' || ce === 'br');
+  const isImage   = !wantMeta && (ct === 'image/webp' || ct === 'image/png');
 
   const max = wantMeta ? ATLAS_META_MAX : ATLAS_BIN_MAX;
   // Require Content-Length so we reject oversize bodies BEFORE buffering
@@ -763,11 +773,15 @@ async function handleAtlasPut(addr, grid, wantMeta, fp, request, env) {
   const buf = await request.arrayBuffer();
   if (buf.byteLength !== len) return errorResponse(400, 'body length mismatch', request);
 
-  // Binary sanity check: only meaningful for raw uploads. For compressed
-  // uploads we trust the client's framing — corruption would cause the
-  // meta count vs. binary length mismatch on read, which the frontend
-  // already handles by falling through to a fresh build.
-  if (!wantMeta && !isGzipped) {
+  if (!wantMeta && isImage) {
+    // Verify magic bytes match the declared content-type. Cheap check
+    // that prevents a client from declaring image/webp but uploading
+    // arbitrary bytes that bypass the raw-RGB structural validation.
+    const detected = detectImageType(buf);
+    if (!detected) return errorResponse(400, 'unrecognized image format', request);
+    if (detected !== ct) return errorResponse(400, `body is ${detected} but Content-Type is ${ct}`, request);
+  } else if (!wantMeta && !isGzipped) {
+    // Legacy raw-RGB upload: byte length must be exactly N × tile² × 3.
     const tile = grid * grid * 3;
     if (buf.byteLength % tile !== 0) {
       return errorResponse(400, `binary not aligned to grid² · 3 (${tile} bytes)`, request);
@@ -807,9 +821,11 @@ async function handleAtlasPut(addr, grid, wantMeta, fp, request, env) {
     }
   }
 
-  const httpMetadata = {
-    contentType: wantMeta ? 'application/json; charset=utf-8' : 'application/octet-stream',
-  };
+  // Persist the actual MIME so GET serves the right Content-Type back.
+  let storedCt = 'application/octet-stream';
+  if (wantMeta)        storedCt = 'application/json; charset=utf-8';
+  else if (isImage)    storedCt = ct;       // image/webp or image/png
+  const httpMetadata = { contentType: storedCt };
   if (isGzipped) httpMetadata.contentEncoding = ce;
 
   // Per-addr R2 entry cap. Atlas keys for one address fan out by grid
