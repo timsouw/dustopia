@@ -861,13 +861,18 @@ const PREVIEW_FRAMES     = 14;             // total frames in the loop
 const PREVIEW_FRAME_MS   = 110;            // delay between frames (≈9 fps display)
 const PREVIEW_WEBP_Q     = 0.78;           // quality arg to canvas.toBlob('image/webp')
 
-// Returns true if R2 already has a captured preview for this addr — skips
-// the re-capture cycle when someone else seeded it. Bypassed via `force`.
+// Returns true ONLY when R2 already holds an animated-WebP capture for this
+// addr; legacy PNG entries from the pre-WebP era return false so the first
+// /embed visitor naturally upgrades them. Bypassed entirely via `force`.
 async function hasCachedPreview(addr) {
   if (!API_URL) return false;
   try {
     const r = await fetch(`${API_URL}/api/preview-cap/${addr}`, { method: 'HEAD' });
-    return r.ok;
+    if (!r.ok) return false;
+    // Only treat WebP as "cached" — anything else (PNG, GIF) is from an
+    // older capture path and should be re-shot in the new animated format.
+    const ct = (r.headers.get('Content-Type') || '').toLowerCase();
+    return ct.startsWith('image/webp');
   } catch { return false; }
 }
 
