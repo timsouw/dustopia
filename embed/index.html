@@ -839,18 +839,26 @@ async function tryFetchCachedAtlas(addr, fp) {
 
 
 // =====================================================================
-// PREVIEW CAPTURE — single-frame PNG snapshot of the live sphere uploaded
-// to R2. Marketplace grids fetch metadata.image, the Worker resolves the
-// token's owner and serves this PNG. We tried animated GIF earlier and
-// the 12fps + dithered output looked rough; one well-timed still of the
-// rendered sphere reads better and weighs ~150-300 KB.
+// PREVIEW CAPTURE — animated WebP loop of the live sphere uploaded to R2.
+// Marketplace grids fetch metadata.image, the Worker resolves the token's
+// owner and serves this WebP. ~12-15 frames at 800px reads as a smooth
+// rotation and weighs ~600 KB-1.5 MB.
+//
+// Encoding is pure-JS RIFF muxing: we ask the browser to canvas.toBlob()
+// each frame as VP8 WebP (native), splice out the VP8 chunks, and wrap
+// them in a VP8X+ANIM+ANMF container. No wasm dependency. If the
+// browser refuses to encode WebP (very old Safari) we fall back to a
+// single-frame PNG so the preview pipeline never breaks.
 // =====================================================================
 
-const PREVIEW_SIZE     = 800;             // PNG is square, matches metadata SVG viewBox
-const PREVIEW_DELAY_MS = 4500;            // wait for swarm to settle before snapping
+const PREVIEW_SIZE       = 800;            // square, matches metadata SVG viewBox
+const PREVIEW_DELAY_MS   = 4500;           // wait for swarm to settle before snapping
+const PREVIEW_FRAMES     = 14;             // total frames in the loop
+const PREVIEW_FRAME_MS   = 110;            // delay between frames (≈9 fps display)
+const PREVIEW_WEBP_Q     = 0.78;           // quality arg to canvas.toBlob('image/webp')
 
 // Returns true if R2 already has a captured preview for this addr — skips
-// the (cheap but wasteful) re-capture cycle when someone else seeded it.
+// the re-capture cycle when someone else seeded it. Bypassed via `force`.
 async function hasCachedPreview(addr) {
   if (!API_URL) return false;
   try {
@@ -859,36 +867,199 @@ async function hasCachedPreview(addr) {
   } catch { return false; }
 }
 
-async function tryCaptureAndUploadPreview(addr) {
-  if (!API_URL || !addr) return;
-  if (await hasCachedPreview(addr)) return;
+// Read a 4-char ASCII tag at offset `o` from a DataView.
+function _riffTag(dv, o) {
+  return String.fromCharCode(dv.getUint8(o), dv.getUint8(o+1), dv.getUint8(o+2), dv.getUint8(o+3));
+}
 
-  const stage = document.getElementById('stage');
-  if (!stage) return;
+// Extract the VP8/VP8L bitstream chunk from a complete WebP file produced
+// by canvas.toBlob('image/webp'). Returns { fourcc, payload } or null.
+// Browser-encoded WebPs are RIFF[size]WEBP + a single VP8 (lossy) or VP8L
+// (lossless) chunk. We don't support animated input here — the source is
+// always a fresh single-frame canvas.
+function _extractVp8Chunk(arrayBuf) {
+  if (arrayBuf.byteLength < 20) return null;
+  const dv = new DataView(arrayBuf);
+  if (_riffTag(dv, 0) !== 'RIFF' || _riffTag(dv, 8) !== 'WEBP') return null;
+  let off = 12;
+  while (off + 8 <= dv.byteLength) {
+    const tag = _riffTag(dv, off);
+    const size = dv.getUint32(off + 4, true);
+    if (tag === 'VP8 ' || tag === 'VP8L') {
+      const payload = new Uint8Array(arrayBuf, off + 8, size);
+      return { fourcc: tag, payload };
+    }
+    off += 8 + size + (size & 1);   // chunks are padded to even byte
+  }
+  return null;
+}
 
-  // Down-/up-sample the live canvas onto a fixed-size offscreen canvas so
-  // the uploaded asset is independent of the visitor's viewport size.
+// Build an animated-WebP bytestream from a list of single-frame VP8 chunks.
+// Spec: https://developers.google.com/speed/webp/docs/riff_container#extended_file_format
+function _buildAnimatedWebP(frames, width, height, frameDurationMs) {
+  // Each VP8 sub-chunk is "VP8 " + size + payload (+ pad). Each ANMF wraps
+  // one such sub-chunk plus a 16-byte frame header.
+  const enc = (s) => new Uint8Array([s.charCodeAt(0), s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)]);
+  const u32le = (n) => {
+    const a = new Uint8Array(4);
+    new DataView(a.buffer).setUint32(0, n >>> 0, true);
+    return a;
+  };
+  const u24le = (n) => {
+    const a = new Uint8Array(3);
+    a[0] = n & 0xff; a[1] = (n >> 8) & 0xff; a[2] = (n >> 16) & 0xff;
+    return a;
+  };
+
+  // VP8X: feature flags (Animation bit only — we don't use alpha/exif/icc/xmp)
+  // followed by 3 reserved bytes, then (W-1) and (H-1) as 24-bit LE.
+  const vp8xPayload = new Uint8Array(10);
+  vp8xPayload[0] = 0x02;            // animation bit
+  vp8xPayload.set(u24le(width  - 1), 4);
+  vp8xPayload.set(u24le(height - 1), 7);
+
+  // ANIM: 4-byte background color (BGRA — we use opaque black) + loop count
+  // (0 = infinite). The bg color shows in transparent areas; opaque frames
+  // ignore it.
+  const animPayload = new Uint8Array(6);
+  animPayload[0] = 0x14; animPayload[1] = 0x14; animPayload[2] = 0x14;  // dark grey BGR
+  animPayload[3] = 0xff;                                                 // alpha
+  animPayload[4] = 0;     animPayload[5] = 0;                            // loop forever
+
+  // Helper: build a full RIFF chunk (4cc + size + payload + pad-byte).
+  const makeChunk = (fourcc, payload) => {
+    const size = payload.length;
+    const pad = size & 1;
+    const out = new Uint8Array(8 + size + pad);
+    out.set(enc(fourcc), 0);
+    out.set(u32le(size), 4);
+    out.set(payload, 8);
+    return out;
+  };
+
+  // Helper: build an ANMF chunk wrapping one VP8 sub-chunk.
+  const makeAnmf = (vp8Sub) => {
+    // 16-byte ANMF header + sub-chunk(s)
+    const header = new Uint8Array(16);
+    header.set(u24le(0), 0);             // X offset (must be even, 0 fine)
+    header.set(u24le(0), 3);             // Y offset
+    header.set(u24le(width  - 1), 6);    // frame W-1
+    header.set(u24le(height - 1), 9);    // frame H-1
+    header.set(u24le(frameDurationMs), 12);  // duration ms
+    header[15] = 0x00;                   // flags: no blending, no dispose
+    const sub = makeChunk(vp8Sub.fourcc, vp8Sub.payload);
+    const body = new Uint8Array(header.length + sub.length);
+    body.set(header, 0);
+    body.set(sub, header.length);
+    return makeChunk('ANMF', body);
+  };
+
+  const vp8xChunk = makeChunk('VP8X', vp8xPayload);
+  const animChunk = makeChunk('ANIM', animPayload);
+  const anmfChunks = frames.map(makeAnmf);
+
+  // Total RIFF body = "WEBP" + VP8X + ANIM + ANMFs
+  let bodyLen = 4 + vp8xChunk.length + animChunk.length;
+  for (const c of anmfChunks) bodyLen += c.length;
+
+  const out = new Uint8Array(8 + bodyLen);
+  out.set(enc('RIFF'), 0);
+  out.set(u32le(bodyLen), 4);
+  out.set(enc('WEBP'), 8);
+  let off = 12;
+  out.set(vp8xChunk, off); off += vp8xChunk.length;
+  out.set(animChunk, off); off += animChunk.length;
+  for (const c of anmfChunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+// Capture N frames from `stage` into a single animated WebP. Frames are
+// snapped on rAF ticks so the sphere keeps rotating between them. Returns
+// a Blob, or null if WebP encoding isn't available in this browser.
+async function captureAnimatedWebP(stage) {
+  const off = document.createElement('canvas');
+  off.width = off.height = PREVIEW_SIZE;
+  const ctx = off.getContext('2d');
+
+  // Snap one frame per `PREVIEW_FRAME_MS`. We rAF-loop instead of setTimeout
+  // so the captured rotation is perceptually smooth — each frame lands on a
+  // freshly-painted GL frame instead of a random time slice.
+  const frames = [];
+  const t0 = performance.now();
+  for (let i = 0; i < PREVIEW_FRAMES; i++) {
+    const target = t0 + i * PREVIEW_FRAME_MS;
+    while (performance.now() < target) await new Promise(r => requestAnimationFrame(r));
+    ctx.fillStyle = '#14141a';
+    ctx.fillRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
+    try { ctx.drawImage(stage, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE); }
+    catch (e) { dwarn('[preview] drawImage failed', e); return null; }
+    const blob = await new Promise(r => off.toBlob(r, 'image/webp', PREVIEW_WEBP_Q));
+    if (!blob) { dwarn('[preview] toBlob webp returned null (browser unsupported?)'); return null; }
+    const buf = await blob.arrayBuffer();
+    const sub = _extractVp8Chunk(buf);
+    if (!sub) { dwarn('[preview] could not extract VP8 chunk from frame', i); return null; }
+    frames.push(sub);
+  }
+
+  const muxed = _buildAnimatedWebP(frames, PREVIEW_SIZE, PREVIEW_SIZE, PREVIEW_FRAME_MS);
+  return new Blob([muxed], { type: 'image/webp' });
+}
+
+// Single-PNG fallback for browsers where WebP encoding fails outright.
+async function captureSinglePng(stage) {
   const off = document.createElement('canvas');
   off.width = off.height = PREVIEW_SIZE;
   const ctx = off.getContext('2d');
   ctx.fillStyle = '#14141a';
   ctx.fillRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
   try { ctx.drawImage(stage, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE); }
-  catch (e) { dwarn('[preview] drawImage failed', e); return; }
+  catch (e) { dwarn('[preview] drawImage failed', e); return null; }
+  return await new Promise(r => off.toBlob(r, 'image/png'));
+}
 
-  const blob = await new Promise(res => off.toBlob(res, 'image/png'));
-  if (!blob) { dwarn('[preview] toBlob returned null'); return; }
+// Capture + upload the preview snapshot. `force=true` skips the
+// hasCachedPreview short-circuit (used after a holder Save, where the
+// existing R2 entry is now stale even if it exists).
+async function tryCaptureAndUploadPreview(addr, opts = {}) {
+  if (!API_URL || !addr) return;
+  if (!opts.force && await hasCachedPreview(addr)) return;
+
+  const stage = document.getElementById('stage');
+  if (!stage) return;
+
+  // Try animated WebP first; fall back to PNG. Either is accepted by the
+  // Worker (httpMetadata.contentType is set from the actual blob type).
+  let blob = await captureAnimatedWebP(stage);
+  let contentType = 'image/webp';
+  if (!blob) {
+    blob = await captureSinglePng(stage);
+    contentType = 'image/png';
+  }
+  if (!blob) { dwarn('[preview] all capture paths failed'); return; }
 
   try {
     const r = await fetch(`${API_URL}/api/preview-cap/${addr}`, {
       method:  'PUT',
-      headers: { 'Content-Type': 'image/png' },
+      headers: { 'Content-Type': contentType },
       body:    blob,
     });
     if (!r.ok) dwarn('[preview] upload', r.status, await r.text().catch(() => ''));
-    else      dbg('[preview] uploaded ok', blob.size, 'bytes');
+    else      dbg('[preview] uploaded', contentType, blob.size, 'bytes');
   } catch (e) { dwarn('[preview] upload err', e); }
 }
+
+// Listener for /configure → "save committed, please re-capture preview now".
+// Only accepts same-origin senders. Force-flag bypasses the cached-preview
+// short-circuit since the R2 entry (if any) is now stale.
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin) return;
+  if (!e.data || typeof e.data !== 'object') return;
+  if (e.data.type === 'dustopia:capture') {
+    const addr = window.__dustopiaWalletAddr;
+    if (!addr) return;
+    tryCaptureAndUploadPreview(addr, { force: true }).catch(() => {});
+  }
+});
 
 // Fire-and-forget upload of a freshly-built atlas. Binary first (the
 // expensive payload), then meta — meta is the "ready" sentinel a future
@@ -1100,6 +1271,10 @@ async function main() {
   // =============================================================
   const built = await waitForLoadAndBuild();
   const { meta, walletAddr: liveWalletAddr } = built;
+  // Stash the resolved address so the postMessage listener (registered
+  // before main() runs) knows whose preview to re-capture when /configure
+  // pings us after a Save.
+  window.__dustopiaWalletAddr = liveWalletAddr;
   const displayName = built.isEns ? built.originalInput
                                   : `${built.walletAddr.slice(0,6)}…${built.walletAddr.slice(-4)}`;
 

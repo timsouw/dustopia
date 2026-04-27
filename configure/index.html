@@ -1013,7 +1013,25 @@ async function onSaveClick() {
     editor.saving = false;
     refreshSidebar();
     const fr = $('#previewFrame');
-    if (fr) fr.src = `/embed/${state.address}?token=${editor.tokenId}&preview=1&t=${Date.now()}`;
+    if (fr) {
+      fr.src = `/embed/${state.address}?token=${editor.tokenId}&preview=1&t=${Date.now()}`;
+      // Once the iframe finishes building the sphere with the saved
+      // selection, ask it to re-capture the preview WebP so OpenSea
+      // and the landing pick up the new look on their next fetch.
+      // Worker already deleted preview/<addr>.bin and purged the edge
+      // cache on PUT, but a fresh capture is what fills R2 again.
+      // PREVIEW_DELAY_MS in /embed waits for the swarm to settle
+      // before snapping; we wait at least that long before pinging.
+      const onceReady = (e) => {
+        if (e.origin !== location.origin) return;
+        if (!e.data || e.data.type !== 'dustopia:built') return;
+        window.removeEventListener('message', onceReady);
+        setTimeout(() => {
+          fr.contentWindow?.postMessage({ type: 'dustopia:capture' }, location.origin);
+        }, 5000);
+      };
+      window.addEventListener('message', onceReady);
+    }
     $('#saveSummary').textContent = '✓ saved · ' + saveSummaryText();
   } catch (e) {
     editor.saving = false;
