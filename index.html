@@ -136,40 +136,76 @@
   }
   body.light .hero { border-bottom-color:rgba(0,0,0,.08); }
 
-  /* Live sphere as the visual anchor — full-bleed iframe of an existing
-     wallet's render. Sits behind the text so the page reads
-     "this is what it does" the moment you land. Pointer events disabled
-     so the whole iframe doesn't fight clicks meant for the CTAs. */
-  .hero-frame {
-    position:absolute; inset:0;
-    width:100%; height:100%;
-    border:0;
-    pointer-events:none;
-    /* Faintly fade the sphere on the right where the text panel sits so
-       the copy stays legible without a heavy gradient overlay. */
-    -webkit-mask-image:linear-gradient(105deg, #000 30%, rgba(0,0,0,.18) 70%);
-            mask-image:linear-gradient(105deg, #000 30%, rgba(0,0,0,.18) 70%);
+  /* ── Hero ──────────────────────────────────────────────────── */
+  .hero {
+    border-bottom:1px solid rgba(255,255,255,.06);
   }
-  body.light .hero-frame {
-    -webkit-mask-image:linear-gradient(105deg, #000 30%, rgba(0,0,0,.10) 70%);
-            mask-image:linear-gradient(105deg, #000 30%, rgba(0,0,0,.10) 70%);
+  body.light .hero { border-bottom-color:rgba(0,0,0,.08); }
+
+  /* Two-column hero: still image on the left, copy on the right.
+     We render a static snapshot of the deploy wallet's sphere instead
+     of a live iframe — saves ~700 MB of GPU/heap on the landing page
+     and renders instantly. /api/preview/1 returns the cached PNG
+     captured by the renderer; falls back to the animated SVG until a
+     PNG snapshot exists. */
+  .hero-grid {
+    display:grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap:56px;
+    align-items:center;
+    min-height:calc(100vh - 54px);
+    padding:48px 0;
   }
-  @media (max-width: 800px) {
-    .hero-frame {
-      -webkit-mask-image:linear-gradient(180deg, #000 0%, rgba(0,0,0,.12) 70%);
-              mask-image:linear-gradient(180deg, #000 0%, rgba(0,0,0,.12) 70%);
+  @media (max-width: 880px) {
+    .hero-grid {
+      grid-template-columns:1fr;
+      min-height:auto;
+      gap:40px;
+      padding:48px 0 64px;
     }
   }
 
-  .hero-content {
-    position:relative; z-index:2;
-    margin-left:auto;
-    max-width:520px;
-    padding:48px 0;
+  .hero-image {
+    position:relative;
+    aspect-ratio:1 / 1;
+    width:100%;
+    border-radius:18px;
+    overflow:hidden;
+    background:#14141a;
+    /* Subtle inner ring so the panel reads as a "preview tile" rather
+       than a full-bleed background. */
+    box-shadow: 0 1px 0 rgba(255,255,255,.04) inset,
+                0 24px 48px -16px rgba(0,0,0,.6);
   }
-  @media (max-width: 800px) {
-    .hero { min-height:auto; padding-top:48vh; }   /* sphere takes top half on mobile */
-    .hero-content { margin-left:0; padding-bottom:64px; }
+  body.light .hero-image {
+    background:#e9e9ec;
+    box-shadow: 0 1px 0 rgba(0,0,0,.04) inset,
+                0 24px 48px -16px rgba(0,0,0,.18);
+  }
+  .hero-image img {
+    width:100%; height:100%;
+    object-fit:cover;
+    display:block;
+  }
+  /* Soft pulse on the preview corner — pure decoration, signals "alive". */
+  .hero-image::after {
+    content:"";
+    position:absolute; top:14px; right:14px;
+    width:8px; height:8px; border-radius:50%;
+    background:#9fe8c0;
+    box-shadow:0 0 10px #9fe8c0;
+    animation:hero-dot 2.4s ease-in-out infinite;
+  }
+  body.light .hero-image::after {
+    background:#16a34a; box-shadow:0 0 10px #16a34a;
+  }
+  @keyframes hero-dot {
+    0%, 100% { opacity:1;   transform:scale(1);   }
+    50%      { opacity:.45; transform:scale(.85); }
+  }
+
+  .hero-content {
+    max-width:520px;
   }
   .hero h1 {
     font-size:64px; font-weight:600; letter-spacing:-0.035em;
@@ -216,23 +252,12 @@
   body.light .btn-ghost:hover { border-color:#18181b; }
   .btn .arrow { font-size:14px; line-height:1; }
 
-  /* "Live demo" label below CTAs */
-  .hero-meta {
-    display:flex; align-items:center; gap:8px;
+  /* Owner / source label under the CTAs */
+  .hero-source {
     color:#7a7a85;
   }
-  body.light .hero-meta { color:#71717a; }
-  .hero-meta .dot {
-    width:6px; height:6px; border-radius:50%;
-    background:#9fe8c0;
-    box-shadow:0 0 8px #9fe8c0;
-    animation:pulse-dot 2.4s ease-in-out infinite;
-  }
-  body.light .hero-meta .dot { background:#16a34a; box-shadow:0 0 8px #16a34a; }
-  @keyframes pulse-dot {
-    0%, 100% { opacity:1;   transform:scale(1);   }
-    50%      { opacity:.45; transform:scale(.85); }
-  }
+  body.light .hero-source { color:#71717a; }
+  .hero-source a { border-bottom:1px solid currentColor; }
 
   /* ── How it works ──────────────────────────────────────────── */
   .steps {
@@ -366,37 +391,40 @@
 </header>
 
 <section class="hero">
-  <!-- Live demo: deploy wallet's already-cached sphere. Hits R2-WebP
-       cache so it paints in 1-2 seconds even on a cold visit. -->
-  <iframe
-    class="hero-frame"
-    src="/embed/0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf"
-    title="Live dustopia sphere demo"
-    loading="lazy"
-    sandbox="allow-scripts allow-same-origin"></iframe>
-
-  <div class="wrap" style="position:relative; z-index:2; width:100%;">
-    <div class="hero-content">
-      <span class="label">Open Edition · Ethereum</span>
-      <h1>dustopia</h1>
-      <p class="tagline">your wallet, in motion.</p>
-      <p class="hero-desc">
-        A living portrait of an Ethereum address. Each Dustopia NFT renders
-        the holder's wallet as a 3D sphere of <span class="mono">36 864</span>
-        particles per token, swirling in real time. The artwork updates
-        automatically as the collection changes hands.
-      </p>
-      <div class="cta-row">
-        <a href="https://opensea.io/collection/dustopia" target="_blank" rel="noopener" class="btn btn-primary">
-          Mint on OpenSea <span class="arrow">→</span>
-        </a>
-        <a href="/configure" class="btn btn-ghost">
-          Configure your token <span class="arrow">→</span>
-        </a>
-      </div>
-      <div class="hero-meta small mono">
-        <span class="dot" aria-hidden="true"></span>
-        <span>live demo · timso.eth</span>
+  <div class="wrap">
+    <div class="hero-grid">
+      <!-- Static snapshot of the deploy wallet's sphere. Single image
+           request, decoded once — vs. ~700 MB GPU/heap for a live
+           iframe. /api/preview/1 falls back to the animated SVG when
+           the PNG capture isn't in R2 yet. -->
+      <a class="hero-image" href="/embed/0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf"
+         title="Open the live sphere">
+        <img src="https://api.dustopia.xyz/api/preview/1"
+             alt="Dustopia sphere preview — wallet rendered as swirling NFT particles"
+             loading="eager" decoding="async"
+             width="1200" height="1200">
+      </a>
+      <div class="hero-content">
+        <span class="label">Open Edition · Ethereum</span>
+        <h1>dustopia</h1>
+        <p class="tagline">your wallet, in motion.</p>
+        <p class="hero-desc">
+          A living portrait of an Ethereum address. Each Dustopia NFT renders
+          the holder's wallet as a 3D sphere of <span class="mono">36 864</span>
+          particles per token, swirling in real time. The artwork updates
+          automatically as the collection changes hands.
+        </p>
+        <div class="cta-row">
+          <a href="https://opensea.io/collection/dustopia" target="_blank" rel="noopener" class="btn btn-primary">
+            Mint on OpenSea <span class="arrow">→</span>
+          </a>
+          <a href="/configure" class="btn btn-ghost">
+            Configure your token <span class="arrow">→</span>
+          </a>
+        </div>
+        <div class="hero-source small mono">
+          preview · token <a href="/embed/0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf">#1</a>
+        </div>
       </div>
     </div>
   </div>
