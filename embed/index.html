@@ -1889,13 +1889,26 @@ async function main() {
   // pointerup can be treated as a click (toggles theme). Threshold = 5px.
   let downX = 0, downY = 0, downTime = 0, totalMove = 0;
   const minZoom = 0.35, maxZoom = 3.0;
+  // Mobile fires both PointerEvents AND TouchEvents for every finger. With
+  // two fingers down each finger is a separate pointerId, but lastX/lastY
+  // are shared — so pointermove jumping between fingers produces wild
+  // deltas (sphere flicks across the canvas). Track active pointers and
+  // bail out of orbit mode the moment a second one shows up; the touch
+  // handlers below own pinch + two-finger swipe.
+  const activePointers = new Set();
   canvas.addEventListener('pointerdown', e => {
+    activePointers.add(e.pointerId);
+    if (activePointers.size > 1) {
+      // Multi-touch starting — abort any single-finger drag.
+      dragging = false;
+      return;
+    }
     dragging = true; lastX = e.clientX; lastY = e.clientY;
     downX = e.clientX; downY = e.clientY; downTime = Date.now(); totalMove = 0;
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', e => {
-    if (!dragging) return;
+    if (!dragging || activePointers.size > 1) return;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     totalMove += Math.hypot(dx, dy);
     userYaw   += dx * 0.006;
@@ -1904,12 +1917,17 @@ async function main() {
     lastX = e.clientX; lastY = e.clientY;
   });
   canvas.addEventListener('pointerup', e => {
+    activePointers.delete(e.pointerId);
+    if (!dragging) return;
     dragging = false;
     // Click (no meaningful drag, short hold) → toggle theme. Works in embed
     // mode too where the chrome theme button isn't available.
     if (totalMove < 5 && Date.now() - downTime < 300) flipTheme();
   });
-  canvas.addEventListener('pointercancel', e => { dragging = false; });
+  canvas.addEventListener('pointercancel', e => {
+    activePointers.delete(e.pointerId);
+    dragging = false;
+  });
   // macOS trackpad: pinch-zoom delivers wheel events with e.ctrlKey === true;
   // two-finger swipe delivers plain wheel events (deltaX + deltaY). Mouse wheel
   // is deltaY-only with no ctrlKey. Branch so swipe→orbit, pinch/wheel→zoom.
