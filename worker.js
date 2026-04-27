@@ -123,7 +123,7 @@ async function upstreamFetch(url, attempts = 3) {
 // can't smuggle path-traversal or huge values into our cache key.
 const PAGE_KEY_RE = /^[A-Za-z0-9_=:.\-]{1,512}$/;
 
-async function handleWallet(address, pageKey, request, env) {
+async function handleWallet(address, pageKey, includeSpam, request, env) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
     return errorResponse(400, 'invalid address', request);
   }
@@ -131,7 +131,11 @@ async function handleWallet(address, pageKey, request, env) {
     return errorResponse(400, 'invalid pageKey', request);
   }
   const addrLower = address.toLowerCase();
-  const cacheKey = `wallet:${addrLower}:${pageKey || ''}`;
+  // Cache key includes the spam-mode so the configurator's "show
+  // everything" call doesn't poison the renderer's clean default cache
+  // (and vice-versa). Without this, whichever request landed first
+  // would set the cache and the other would silently get the wrong shape.
+  const cacheKey = `wallet:${addrLower}:${pageKey || ''}:${includeSpam ? 'all' : 'clean'}`;
 
   // Try KV cache first
   const cached = await env.WALLET_CACHE.get(cacheKey);
@@ -144,7 +148,11 @@ async function handleWallet(address, pageKey, request, env) {
   u.searchParams.set('owner', address);
   u.searchParams.set('pageSize', '100');
   u.searchParams.set('withMetadata', 'true');
-  u.searchParams.set('excludeFilters[]', 'SPAM');
+  // Default behaviour drops Alchemy-flagged spam (good for the renderer's
+  // default "show all" mode). The configurator passes ?spam=include so
+  // holders can pick from EVERYTHING they own — false-positives on real
+  // collections (CryptoPunks, Punks v1, etc.) used to silently disappear.
+  if (!includeSpam) u.searchParams.set('excludeFilters[]', 'SPAM');
   if (pageKey) u.searchParams.set('pageKey', pageKey);
 
   let r;
@@ -253,6 +261,74 @@ async function handleOwned(addr, request, env) {
   env.WALLET_CACHE.put(cacheKey, body, { expirationTtl: OWNED_TTL }).catch(() => {});
   return jsonResponse(body, request, { headers: { 'X-Cache': 'MISS' } });
 }
+
+// =====================================================================
+// FLOOR PRICES — batched Alchemy getFloorPrice calls for the
+// configurator's "sort by floor" dropdown. We accept a comma-separated
+// contract list, fan out one Alchemy call per contract (Alchemy doesn't
+// expose a batch endpoint for floors), KV-cache each result for 30 min,
+// and return a flat { floors: { <contract>: { price, currency } } } map.
+//
+// Each contract result reflects OpenSea's floor in ETH where available.
+// Alchemy returns 0 / null for collections with no marketplace data
+// (mint-still-open, illiquid, or not indexed) — we surface those as
+// `{ price: null, currency: null }` so the frontend can sort them last.
+// =====================================================================
+const FLOOR_TTL          = 30 * 60;     // 30 min — floor prices are noisy at minute scale
+const FLOOR_MAX_BATCH    = 64;          // hard cap so a malicious caller can't fan out 1000 alchemy calls
+const FLOOR_CONTRACT_RE  = /^0x[0-9a-fA-F]{40}$/;
+
+async function alchemyFloorOne(contract, env) {
+  const cacheKey = `floor:${contract.toLowerCase()}`;
+  const cached = await env.WALLET_CACHE.get(cacheKey);
+  if (cached) {
+    try { return JSON.parse(cached); } catch { /* fall through to refetch */ }
+  }
+  const u = new URL(`https://eth-mainnet.g.alchemy.com/nft/v3/${env.ALCHEMY_KEY}/getFloorPrice`);
+  u.searchParams.set('contractAddress', contract);
+  let json;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ALCH_TIMEOUT_MS);
+    const r = await fetch(u.toString(), { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!r.ok) return { price: null, currency: null };
+    json = await r.json();
+  } catch { return { price: null, currency: null }; }
+  // Alchemy returns marketplace-keyed shape: { openSea: {...}, looksRare: {...} }.
+  // Prefer OpenSea, fall back to LooksRare. Skip "error" entries.
+  const pickFrom = (entry) => {
+    if (!entry || entry.error) return null;
+    const p = Number(entry.floorPrice);
+    return Number.isFinite(p) && p > 0 ? { price: p, currency: entry.priceCurrency || 'ETH' } : null;
+  };
+  const out = pickFrom(json.openSea) || pickFrom(json.looksRare) || { price: null, currency: null };
+  env.WALLET_CACHE.put(cacheKey, JSON.stringify(out), { expirationTtl: FLOOR_TTL }).catch(() => {});
+  return out;
+}
+
+async function handleFloor(request, env) {
+  const url = new URL(request.url);
+  const raw = url.searchParams.get('contracts') || '';
+  if (!raw) return errorResponse(400, 'contracts query param required', request);
+  const contracts = raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (!contracts.length) return errorResponse(400, 'no contracts', request);
+  if (contracts.length > FLOOR_MAX_BATCH) {
+    return errorResponse(400, `too many contracts (max ${FLOOR_MAX_BATCH})`, request);
+  }
+  for (const c of contracts) {
+    if (!FLOOR_CONTRACT_RE.test(c)) return errorResponse(400, `invalid contract: ${c}`, request);
+  }
+  // Fan out in parallel. Each per-contract call is KV-cached so on a
+  // warm wallet most of these resolve instantly without touching Alchemy.
+  const results = await Promise.all(contracts.map(c => alchemyFloorOne(c, env)));
+  const floors = {};
+  for (let i = 0; i < contracts.length; i++) floors[contracts[i]] = results[i];
+  return jsonResponse({ floors }, request, {
+    headers: { 'Cache-Control': 'public, max-age=300' },  // 5 min edge cache
+  });
+}
+
 // The drop contract's baseURI is set to https://api.dustopia.xyz/api/metadata/
 // so tokenURI(N) becomes /api/metadata/N. We respond with a standard ERC-721
 // metadata JSON whose animation_url loads the live sphere of the token's
@@ -1304,7 +1380,8 @@ export default {
     // /api/wallet/<address>
     const walletMatch = path.match(/^\/api\/wallet\/([^/]+)\/?$/);
     if (walletMatch) {
-      return handleWallet(walletMatch[1], url.searchParams.get('pageKey') || '', request, env);
+      const includeSpam = url.searchParams.get('spam') === 'include';
+      return handleWallet(walletMatch[1], url.searchParams.get('pageKey') || '', includeSpam, request, env);
     }
 
     // /api/ens/<name>
@@ -1317,6 +1394,11 @@ export default {
     const ownedMatch = path.match(/^\/api\/owned\/([^/]+)\/?$/);
     if (ownedMatch) {
       return handleOwned(ownedMatch[1], request, env);
+    }
+
+    // /api/floor?contracts=<csv> — batched OpenSea/LooksRare floors
+    if (path === '/api/floor') {
+      return handleFloor(request, env);
     }
 
     return errorResponse(404, 'not found', request);
