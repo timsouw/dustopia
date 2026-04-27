@@ -544,56 +544,68 @@ function buildAtlasMeta(pairs) {
   };
 }
 
-// Worker source: drawn-on-main-thread Images can't be transferred, but
-// ImageBitmaps can. Main thread converts each Image → ImageBitmap (parallel
-// via createImageBitmap), transfers them all here, and we do the heavy
-// per-tile drawImage + getImageData on OffscreenCanvas without touching the
-// UI thread. Result: render loop stays at 60 fps even while a 500-token
-// atlas is being stitched. Returns the Uint8Array buffer (zero-copy back).
+// Quality knob for the WebP-encoded atlas. q=0.90 gives ~10× smaller
+// payload than raw RGB (44 MB → ~4-5 MB for a 500-token wallet) with no
+// perceptible quality loss in the final particle render — particles
+// sample atlas at ~2-3 pixels with motion blur, so high-frequency
+// compression artifacts simply don't make it to the eye.
+const ATLAS_WEBP_QUALITY = 0.90;
+
+// Worker source: builds the atlas as a single 2D image grid on
+// OffscreenCanvas, encodes to WebP for upload, AND extracts pixel data
+// for immediate GPU upload. Returns both — the blob is what we PUT to R2,
+// the atlasData is what main() hands to texImage2D right away. We avoid
+// the round-trip "decode the WebP we just encoded" by keeping both.
 const ATLAS_WORKER_SRC = `
-self.onmessage = (e) => {
-  const { bitmaps, tileSize } = e.data;
+self.onmessage = async (e) => {
+  const { bitmaps, tileSize, TPR, webpQuality } = e.data;
   const N = bitmaps.length;
-  const canvas = new OffscreenCanvas(tileSize, tileSize);
+  const atlasRows = Math.ceil(N / TPR);
+  const atlasW = TPR * tileSize;
+  const atlasH = atlasRows * tileSize;
+  const canvas = new OffscreenCanvas(atlasW, atlasH);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const bin = new Uint8Array(N * tileSize * tileSize * 3);
+  // Black background fills any partial last row / missing tiles. Matches
+  // the dark theme bg and is invisible against #14141a.
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, atlasW, atlasH);
   for (let i = 0; i < N; i++) {
     const bmp = bitmaps[i];
-    ctx.clearRect(0, 0, tileSize, tileSize);
-    if (bmp) {
-      try { ctx.drawImage(bmp, 0, 0, tileSize, tileSize); } catch {}
-      try { bmp.close(); } catch {}
-    }
-    let rgba;
-    try { rgba = ctx.getImageData(0, 0, tileSize, tileSize).data; }
-    catch { rgba = new Uint8ClampedArray(tileSize * tileSize * 4); }
-    const dst = i * tileSize * tileSize * 3;
-    for (let p = 0, q = dst; p < rgba.length; p += 4, q += 3) {
-      bin[q]   = rgba[p];
-      bin[q+1] = rgba[p+1];
-      bin[q+2] = rgba[p+2];
-    }
+    if (!bmp) continue;
+    const tx = (i % TPR) * tileSize;
+    const ty = ((i / TPR) | 0) * tileSize;
+    try { ctx.drawImage(bmp, tx, ty, tileSize, tileSize); } catch {}
+    try { bmp.close(); } catch {}
   }
-  self.postMessage({ binBuf: bin.buffer }, [bin.buffer]);
+  // Upload-ready WebP, plus immediate-use 2D RGB pixel data.
+  const atlasBlob = await canvas.convertToBlob({ type: 'image/webp', quality: webpQuality });
+  let rgba;
+  try { rgba = ctx.getImageData(0, 0, atlasW, atlasH).data; }
+  catch { rgba = new Uint8ClampedArray(atlasW * atlasH * 4); }
+  const atlasData = new Uint8Array(atlasW * atlasH * 3);
+  for (let p = 0, q = 0; p < rgba.length; p += 4, q += 3) {
+    atlasData[q]   = rgba[p];
+    atlasData[q+1] = rgba[p+1];
+    atlasData[q+2] = rgba[p+2];
+  }
+  self.postMessage(
+    { atlasData: atlasData.buffer, atlasW, atlasH, atlasBlob },
+    [atlasData.buffer]
+  );
 };
 `;
 
-// Off-thread atlas build. Resolves to { meta, binBuf } same as the sync path.
-// Caller must ensure OffscreenCanvas + createImageBitmap are available.
+// Off-thread atlas build. Resolves to { meta, atlasData, atlasW, atlasH,
+// atlasBlob } — atlasData is the 2D RGB grid main() uploads to GPU; atlasBlob
+// is the WebP body uploaded to R2. Caller must ensure OffscreenCanvas +
+// createImageBitmap are available.
 async function buildAtlasInWorker(pairs) {
   const tileSize = LIVE_TILE;
-  // Convert HTMLImageElement → ImageBitmap. createImageBitmap is async and
-  // safe to parallelize; null images stay null so worker draws black.
   const bitmaps = await Promise.all(pairs.map(p =>
     p.image ? createImageBitmap(p.image).catch(() => null) : null
   ));
   const blobUrl = URL.createObjectURL(new Blob([ATLAS_WORKER_SRC], { type: 'application/javascript' }));
   let worker = null;
-  // Centralised cleanup: kill the worker, revoke the blob URL, close any
-  // bitmaps we never managed to transfer. Idempotent — calling twice is fine.
-  // This guarantees no resource leaks even if postMessage throws synchronously
-  // (e.g. transferList contains a non-transferable) or the worker emits an
-  // error before transfer completes.
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return; cleaned = true;
@@ -604,10 +616,19 @@ async function buildAtlasInWorker(pairs) {
   try {
     worker = new Worker(blobUrl);
     return await new Promise((resolve, reject) => {
-      worker.onmessage = (e) => { cleanup(); resolve({ meta: buildAtlasMeta(pairs), binBuf: e.data.binBuf }); };
-      worker.onerror   = (e) => { cleanup(); reject(e); };
+      worker.onmessage = (e) => {
+        cleanup();
+        resolve({
+          meta:       buildAtlasMeta(pairs),
+          atlasData:  new Uint8Array(e.data.atlasData),
+          atlasW:     e.data.atlasW,
+          atlasH:     e.data.atlasH,
+          atlasBlob:  e.data.atlasBlob,
+        });
+      };
+      worker.onerror = (e) => { cleanup(); reject(e); };
       const transferList = bitmaps.filter(b => b);
-      try { worker.postMessage({ bitmaps, tileSize }, transferList); }
+      try { worker.postMessage({ bitmaps, tileSize, TPR: ATLAS_TILES_ROW, webpQuality: ATLAS_WEBP_QUALITY }, transferList); }
       catch (e) { cleanup(); reject(e); }
     });
   } catch (e) {
@@ -616,36 +637,41 @@ async function buildAtlasInWorker(pairs) {
   }
 }
 
-// Synchronous fallback for environments without OffscreenCanvas/Worker
-// (older iOS Safari versions). Identical output, but blocks the main thread
-// for a few seconds on big wallets — UI jitter, not broken.
-function buildAtlasBinary(pairs) {
+// Synchronous fallback for environments without OffscreenCanvas/Worker.
+// Identical output shape; blocks the main thread on the canvas paint +
+// WebP encode for a few seconds on big wallets.
+async function buildAtlasBinary(pairs) {
   const N = pairs.length;
   const tileSize = LIVE_TILE;
+  const TPR = ATLAS_TILES_ROW;
+  const atlasRows = Math.ceil(N / TPR);
+  const atlasW = TPR * tileSize;
+  const atlasH = atlasRows * tileSize;
   const c = document.createElement('canvas');
-  c.width = tileSize; c.height = tileSize;
+  c.width = atlasW; c.height = atlasH;
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  const bin = new Uint8Array(N * tileSize * tileSize * 3);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, atlasW, atlasH);
   for (let i = 0; i < N; i++) {
     const { image } = pairs[i];
-    ctx.clearRect(0, 0, tileSize, tileSize);
-    if (image) {
-      try { ctx.drawImage(image, 0, 0, tileSize, tileSize); } catch {}
-    }
-    let rgba;
-    try { rgba = ctx.getImageData(0, 0, tileSize, tileSize).data; }
-    catch { rgba = new Uint8ClampedArray(tileSize * tileSize * 4); }
-    const dst = i * tileSize * tileSize * 3;
-    for (let p = 0, q = dst; p < rgba.length; p += 4, q += 3) {
-      bin[q]   = rgba[p];
-      bin[q+1] = rgba[p+1];
-      bin[q+2] = rgba[p+2];
-    }
+    if (!image) continue;
+    const tx = (i % TPR) * tileSize;
+    const ty = ((i / TPR) | 0) * tileSize;
+    try { ctx.drawImage(image, tx, ty, tileSize, tileSize); } catch {}
   }
-  return { meta: buildAtlasMeta(pairs), binBuf: bin.buffer };
+  const atlasBlob = await new Promise(res => c.toBlob(res, 'image/webp', ATLAS_WEBP_QUALITY));
+  let rgba;
+  try { rgba = ctx.getImageData(0, 0, atlasW, atlasH).data; }
+  catch { rgba = new Uint8ClampedArray(atlasW * atlasH * 4); }
+  const atlasData = new Uint8Array(atlasW * atlasH * 3);
+  for (let p = 0, q = 0; p < rgba.length; p += 4, q += 3) {
+    atlasData[q]   = rgba[p];
+    atlasData[q+1] = rgba[p+1];
+    atlasData[q+2] = rgba[p+2];
+  }
+  return { meta: buildAtlasMeta(pairs), atlasData, atlasW, atlasH, atlasBlob };
 }
 
-// Pick the off-thread path when supported; otherwise fall back to sync.
 async function buildAtlasAuto(pairs) {
   const offThreadOk = typeof Worker !== 'undefined'
                    && typeof OffscreenCanvas !== 'undefined'
@@ -655,6 +681,32 @@ async function buildAtlasAuto(pairs) {
     catch (e) { dwarn('atlas worker failed, falling back', e); }
   }
   return buildAtlasBinary(pairs);
+}
+
+// Decode a stored atlas image (WebP/PNG) into the 2D RGB pixel data the
+// renderer hands to texImage2D. Symmetric inverse of the build path.
+async function decodeAtlasImage(blob) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const atlasW = img.naturalWidth, atlasH = img.naturalHeight;
+    const c = document.createElement('canvas');
+    c.width = atlasW; c.height = atlasH;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const rgba = ctx.getImageData(0, 0, atlasW, atlasH).data;
+    const atlasData = new Uint8Array(atlasW * atlasH * 3);
+    for (let p = 0, q = 0; p < rgba.length; p += 4, q += 3) {
+      atlasData[q]   = rgba[p];
+      atlasData[q+1] = rgba[p+1];
+      atlasData[q+2] = rgba[p+2];
+    }
+    return { atlasData, atlasW, atlasH };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 function setProgress(pct, active) {
@@ -719,10 +771,19 @@ function filterNftsBySelection(nfts, selection) {
   return out;
 }
 
-// Returns { meta, binBuf } if cache hit, null on miss / any error.
-// "Any error" includes server 5xx, malformed payload, or a binary whose
-// length doesn't match meta.count · GRID² · 3 (stale cache after a GRID
-// constant change). On null we fall through to a fresh local build.
+// Returns { meta, atlasData, atlasW, atlasH } on cache hit, null on miss
+// or any error. Two storage formats are supported transparently:
+//
+//   • image/webp (current) — single 2D atlas grid encoded at q=0.9. Decoded
+//     here via Image + canvas.getImageData. Roughly 10× smaller than raw
+//     RGB on typical photographic NFT thumbs.
+//
+//   • application/octet-stream (legacy, raw RGB concatenated 1D) — kept
+//     for backwards compat with R2 entries written before the WebP cutover.
+//     Repacks 1D bin into a 2D atlas grid in JS.
+//
+// Both paths return identical-shape objects so main() doesn't have to
+// know which format was on disk.
 async function tryFetchCachedAtlas(addr, fp) {
   if (!API_URL) return null;
   const fpQ = (fp && fp !== 'all') ? `&fp=${fp}` : '';
@@ -737,23 +798,45 @@ async function tryFetchCachedAtlas(addr, fp) {
   } catch { return null; }
   let meta;
   try { meta = await metaRes.json(); } catch { return null; }
+
+  const ct = (binRes.headers.get('Content-Type') || '').toLowerCase();
+  const tileSize = GRID;
+  const TPR = ATLAS_TILES_ROW;
+
+  if (ct.startsWith('image/')) {
+    // New WebP/PNG path: decode → 2D atlas pixel data.
+    let blob;
+    try { blob = await binRes.blob(); } catch { return null; }
+    let decoded;
+    try { decoded = await decodeAtlasImage(blob); } catch (e) { dwarn('atlas decode failed', e); return null; }
+    return { meta, atlasData: decoded.atlasData, atlasW: decoded.atlasW, atlasH: decoded.atlasH };
+  }
+
+  // Legacy path: raw RGB concatenated 1D, must equal exactly N × tile² × 3 bytes.
   const binBuf = await binRes.arrayBuffer();
-  const expected = meta.count * GRID * GRID * 3;
+  const expected = meta.count * tileSize * tileSize * 3;
   if (binBuf.byteLength !== expected) return null;
-  return { meta, binBuf };
+
+  // Repack 1D → 2D for the renderer (it always works in 2D atlas-grid form).
+  const atlasRows = Math.ceil(meta.count / TPR);
+  const atlasW = TPR * tileSize;
+  const atlasH = atlasRows * tileSize;
+  const atlasData = new Uint8Array(atlasW * atlasH * 3);
+  const lodTiles = new Uint8Array(binBuf);
+  const stride = tileSize * 3;
+  for (let ti = 0; ti < meta.count; ti++) {
+    const tileX = ti % TPR;
+    const tileY = (ti / TPR) | 0;
+    const srcStart = ti * tileSize * tileSize * 3;
+    for (let py = 0; py < tileSize; py++) {
+      const srcRow = srcStart + py * stride;
+      const dstRow = ((tileY * tileSize + py) * atlasW + tileX * tileSize) * 3;
+      atlasData.set(lodTiles.subarray(srcRow, srcRow + stride), dstRow);
+    }
+  }
+  return { meta, atlasData, atlasW, atlasH };
 }
 
-// Gzip an ArrayBuffer using the browser's CompressionStream API.
-// Returns null on unsupported browsers (older iOS Safari) so callers can
-// fall back to raw upload — the Worker accepts both.
-async function gzipBuffer(buf) {
-  if (typeof CompressionStream === 'undefined') return null;
-  try {
-    const cs = new CompressionStream('gzip');
-    const stream = new Response(buf).body.pipeThrough(cs);
-    return await new Response(stream).arrayBuffer();
-  } catch { return null; }
-}
 
 // =====================================================================
 // PREVIEW CAPTURE — single-frame PNG snapshot of the live sphere uploaded
@@ -812,23 +895,21 @@ async function tryCaptureAndUploadPreview(addr) {
 // reader checks first, so this ordering guarantees no half-cached state.
 // Errors are swallowed: a failed upload just means the next visitor pays
 // the build cost again, no user-visible damage.
-async function uploadAtlas(addr, meta, binBuf, fp) {
-  if (!API_URL) return;
+//
+// Body is a WebP-encoded 2D atlas image (~10× smaller than the prior
+// raw-RGB+gzip path with imperceptible quality loss in the rendered
+// sphere). The Worker's atlas PUT accepts both the legacy raw bytes and
+// image/webp transparently.
+async function uploadAtlas(addr, meta, atlasBlob, fp) {
+  if (!API_URL || !atlasBlob) return;
   const fpQ = (fp && fp !== 'all') ? `&fp=${fp}` : '';
   const base = `${API_URL}/api/atlas/${addr}?grid=${GRID}${fpQ}`;
   try {
-    // Gzip the binary client-side. NFT thumbnail RGB data is moderately
-    // compressible (typically 35-55% reduction), and shipping fewer bytes
-    // both saves R2 egress AND speeds up the very next visitor's GET.
-    // Fall back to raw upload if CompressionStream isn't available.
-    const gz = await gzipBuffer(binBuf);
-    const headers = { 'Content-Type': 'application/octet-stream' };
-    let body = binBuf;
-    if (gz && gz.byteLength < binBuf.byteLength) {
-      body = gz;
-      headers['Content-Encoding'] = 'gzip';
-    }
-    const r1 = await fetch(base, { method: 'PUT', headers, body });
+    const r1 = await fetch(base, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'image/webp' },
+      body:    atlasBlob,
+    });
     if (!r1.ok) { dwarn('atlas bin upload', r1.status); return; }
     const r2 = await fetch(base + '&meta=1', {
       method:  'PUT',
@@ -894,7 +975,9 @@ async function buildLiveData(input) {
     setStatus(`<span class="ok">✓ cached atlas (${cached.meta.count} tokens)</span>`);
     return {
       meta:           cached.meta,
-      binBuf:         cached.binBuf,
+      atlasData:      cached.atlasData,
+      atlasW:         cached.atlasW,
+      atlasH:         cached.atlasH,
       walletAddr:     addr,
       originalInput:  original,
       isEns,
@@ -947,14 +1030,14 @@ async function buildLiveData(input) {
   if (!pairs.length) throw new Error('all image fetches failed (CORS?)');
   const failed = used.length - pairs.length;
   setStatus(`<span>building atlas (${pairs.length} tokens)…</span>`);
-  const { meta, binBuf } = await buildAtlasAuto(pairs);
+  const { meta, atlasData, atlasW, atlasH, atlasBlob } = await buildAtlasAuto(pairs);
   // Fire-and-forget: persist this atlas to R2 so the next visit (or every
   // OpenSea iframe load on this NFT) hits the cache path above. Awaited
   // upload would block first paint by ~5-30s for large wallets — not worth
   // it. Failures are logged and otherwise ignored. Skipped in preview mode
   // so editor drafts don't pollute the public cache.
-  if (!window.__dustopiaPreview) uploadAtlas(addr, meta, binBuf, fp);
-  return { meta, binBuf, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false, selection, fp };
+  if (!window.__dustopiaPreview) uploadAtlas(addr, meta, atlasBlob, fp);
+  return { meta, atlasData, atlasW, atlasH, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false, selection, fp };
 }
 
 function waitForLoadAndBuild() {
@@ -1016,7 +1099,7 @@ async function main() {
   // 1) WAIT FOR USER + LIVE BUILD
   // =============================================================
   const built = await waitForLoadAndBuild();
-  const { meta, binBuf, walletAddr: liveWalletAddr } = built;
+  const { meta, walletAddr: liveWalletAddr } = built;
   const displayName = built.isEns ? built.originalInput
                                   : `${built.walletAddr.slice(0,6)}…${built.walletAddr.slice(-4)}`;
 
@@ -1102,28 +1185,15 @@ async function main() {
   resize();
 
   // =============================================================
-  // 3) ATLAS TEXTURE (all N tokens at highest LOD, default 96×96)
+  // 3) ATLAS TEXTURE — pre-laid 2D RGB grid, ready for texImage2D.
   // =============================================================
+  // buildAtlasAuto and tryFetchCachedAtlas both produce the atlas in
+  // 2D-grid form (atlasData / atlasW / atlasH); no 1D-to-2D unpacking
+  // step here anymore. WebP-cached atlases decode straight into the
+  // right shape, raw-RGB legacy atlases get repacked inside the
+  // fetch helper before we get here.
   const TPR = ATLAS_TILES_ROW;
-  const atlasRows = Math.ceil(N / TPR);
-  const atlasW = TPR * tileSize;
-  const atlasH = atlasRows * tileSize;
-  // Atlas is fully overwritten by token tiles below, but the last partial row
-  // has unused tiles — zero-init (default) keeps those as pure black (matches dark theme).
-  const atlasData = new Uint8Array(atlasW * atlasH * 3);
-
-  const lodTiles = new Uint8Array(binBuf, 0, N * tileSize * tileSize * 3);
-  const stride = tileSize * 3;
-  for (let ti = 0; ti < N; ti++) {
-    const tileX = ti % TPR;
-    const tileY = (ti / TPR) | 0;
-    const srcStart = ti * tileSize * tileSize * 3;
-    for (let py = 0; py < tileSize; py++) {
-      const srcRow = srcStart + py * stride;
-      const dstRow = ((tileY * tileSize + py) * atlasW + tileX * tileSize) * 3;
-      atlasData.set(lodTiles.subarray(srcRow, srcRow + stride), dstRow);
-    }
-  }
+  const { atlasData, atlasW, atlasH } = built;
 
   const atlasTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, atlasTex);
