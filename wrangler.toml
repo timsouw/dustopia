@@ -12,7 +12,13 @@
 # from CLI, the namespace ID below must match. Get it via:
 #   wrangler kv:namespace list
 
-name = "dustopia"
+# Worker is named `franken-api` in the Cloudflare dashboard. The Pages
+# project (frontend) is separately named `dustopia` — they're different
+# resources sharing only the brand. A Cloudflare-bot PR (#1) once tried
+# to "align" the Worker name with the Pages project name; rejected
+# because changing the Worker name here detaches api.dustopia.xyz from
+# the Worker that owns it (custom domain is bound to a specific Worker).
+name = "franken-api"
 main = "worker.js"
 compatibility_date = "2026-04-25"
 
