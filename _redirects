@@ -1,7 +1,23 @@
-# Cloudflare Pages serves directory index.html natively for /foo when
-# foo/index.html exists, so the bare /embed and /configure URLs need no
-# explicit rewrite. The wildcards below catch sub-paths so the JS-side
-# router on each page can parse /embed/<addr> and /configure/<tokenId>
-# deep links without a hash. Status 200 = rewrite (URL bar unchanged).
-/embed/*     /embed/index.html      200
-/configure/* /configure/index.html  200
+# Cloudflare Pages routing.
+#
+# We tried `/embed/* /embed/index.html 200` first — production showed that
+# the deployment was falling through to the root index.html (the new
+# landing) for /embed/<addr>, causing the hero iframe to recursively load
+# the landing inside itself. Diagnosis: Cloudflare Pages is applying its
+# auto SPA-fallback for non-matching paths AHEAD of our index.html
+# destination (or the destination is being normalised through pretty-URL
+# stripping in a way that loses the rewrite).
+#
+# Fix: rewrite to the directory itself (no `index.html` suffix) so Pages's
+# native directory-index handling resolves it without touching pretty-URL
+# logic, AND keep an explicit catch-all at the end so Pages doesn't
+# inject its own SPA fallback that swallows our deeper rules. Order is
+# significant — the most-specific rules fire first.
+
+/embed/*     /embed/      200
+/configure/* /configure/  200
+
+# Fallback for unknown URLs. Without this Pages auto-injects something
+# similar but inserts it BEFORE the rules above, which is what broke
+# /embed/<addr> on the previous deploy.
+/*           /index.html  200
