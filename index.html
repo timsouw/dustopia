@@ -109,34 +109,21 @@
 
   /* Cold-start progress UI for embed mode. The full #loadPanel is hidden
      in OpenSea iframes, but visitors still need feedback during the ~30s
-     cold build. Classic centered "loading" + three pulsing dots. The
-     dots breathe in/out with staggered delays so the indicator looks
-     alive even though our actual progress fraction is hidden. */
+     cold build. We render a tiny grayscale version of the actual sphere
+     in a Canvas2D so the loader IS the brand — same orbital motion,
+     same depth-shading, just smaller and monochrome. CSS only sizes the
+     container; everything visible is painted from JS in main()'s siblings.
+     Hidden again the moment the sphere paints. */
   #embedLoader {
     position:fixed; inset:0;
     display:none; align-items:center; justify-content:center;
     pointer-events:none; user-select:none;
     z-index:60;
   }
-  #embedLoader .text {
-    font-family:inherit;
-    font-size:26px;
-    letter-spacing:.18em;
-    text-transform:lowercase;
-    color:#e7e7ea;
+  #embedLoader canvas {
+    width:84px; height:84px;
+    image-rendering:auto;
   }
-  #embedLoader .dots span {
-    display:inline-block;
-    animation:dustopia-dot 1.4s ease-in-out infinite;
-  }
-  #embedLoader .dots span:nth-child(1) { animation-delay: 0.00s; }
-  #embedLoader .dots span:nth-child(2) { animation-delay: 0.20s; }
-  #embedLoader .dots span:nth-child(3) { animation-delay: 0.40s; }
-  @keyframes dustopia-dot {
-    0%, 80%, 100% { opacity: 0.18; }
-    40%           { opacity: 1; }
-  }
-  body.light #embedLoader .text { color:#18181b; }
   body.embed #embedLoader { display:flex; }
 </style>
 </head>
@@ -205,6 +192,107 @@
     if (saved === 'dark') document.body.classList.remove('light');
     else                  document.body.classList.add('light');
   })();
+
+  // ────────────────────────────────────────────────────────────────
+  // Mini-sphere loading indicator
+  //
+  // Tiny grayscale Canvas2D mirror of the real sphere's behaviour:
+  // particles distributed on a unit sphere via Fibonacci spiral,
+  // rotated around the Y axis, with depth-driven shading (front =
+  // bright gray, back = near-bg) and a small per-particle wobble so
+  // the dot field never looks frozen. Brand-coherent loader for the
+  // OpenSea iframe — same idea, just smaller and monochrome.
+  //
+  // Pure 2D so it can't fight the WebGL2 context the main renderer
+  // is spinning up in parallel. Stops itself on .style.display='none'
+  // (set when the real sphere starts painting in main()).
+  (function() {
+    const canvas = document.getElementById('embedLoaderCanvas');
+    if (!canvas || !canvas.getContext) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const cx = W / 2, cy = H / 2;
+    const R  = W * 0.36;
+
+    // Fibonacci-spiral seeding gives a visually-uniform distribution on
+    // the sphere without hot spots near the poles. ~80 dots reads as
+    // "sphere of particles" without looking too dense at this scale.
+    const N = 80;
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      const y = 1 - (i / (N - 1)) * 2;     // -1 .. 1
+      const r = Math.sqrt(1 - y * y);
+      const th = golden * i;
+      pts.push({
+        x: r * Math.cos(th),
+        y,
+        z: r * Math.sin(th),
+        phase: Math.random() * Math.PI * 2,
+      });
+    }
+
+    let stop = false;
+    const start = performance.now();
+    function frame(now) {
+      if (stop) return;
+      // Stop animating once the main render hides the loader. Avoids
+      // burning a frame budget while invisible.
+      const wrap = document.getElementById('embedLoader');
+      if (!wrap || wrap.style.display === 'none') return;
+
+      const t = (now - start) * 0.001;
+      const cosT = Math.cos(t * 0.45), sinT = Math.sin(t * 0.45);
+      const isLight = document.body.classList.contains('light');
+      ctx.clearRect(0, 0, W, H);
+
+      // Project + draw back-to-front so closer dots overlap farther ones.
+      const view = pts.map(p => {
+        const x1 = p.x * cosT + p.z * sinT;
+        const z1 = -p.x * sinT + p.z * cosT;
+        // Per-particle wobble + global breathe gives a subtle "alive" feel.
+        const wob = 1 + 0.06 * Math.sin(t * 1.2 + p.phase);
+        return { x: x1 * wob, y: p.y * wob, z: z1 };
+      });
+      view.sort((a, b) => a.z - b.z);
+
+      for (const v of view) {
+        // shade: back (z=-1) → 0, front (z=+1) → 1
+        const shade = (v.z + 1) / 2;
+        const px = cx + v.x * R;
+        const py = cy + v.y * R;
+        // Particles get slightly bigger when close to camera (depth cue).
+        const radius = 1.4 + shade * 1.2;
+        // Light theme: dark particles on light bg. Dark theme: bright
+        // particles on dark bg. Both fade toward bg color at the back.
+        let g;
+        if (isLight) {
+          // Bright bg #f4f4f5 → particles range #18181b (front) to #c4c4c8 (back, near bg)
+          g = Math.round(24 + (1 - shade) * 176);
+        } else {
+          // Dark bg #14141a → particles range #e7e7ea (front) to #2a2a30 (back, near bg)
+          g = Math.round(40 + shade * 195);
+        }
+        ctx.fillStyle = `rgb(${g},${g},${g + (isLight ? 0 : 4)})`;
+        ctx.beginPath();
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    // Re-start the loop if the main render later re-shows the loader
+    // (e.g. configure.html changing iframe.src for live preview). The
+    // existing frame() will exit on display:none; we re-arm it here.
+    new MutationObserver(() => {
+      const wrap = document.getElementById('embedLoader');
+      if (wrap && wrap.style.display !== 'none') {
+        stop = false;
+        requestAnimationFrame(frame);
+      }
+    }).observe(document.getElementById('embedLoader') || document.body, { attributes: true, attributeFilter: ['style'] });
+  })();
 </script>
 <div id="loader" style="display:none">loading tokens…</div>
 <div id="err"></div>
@@ -233,7 +321,7 @@
 </div>
 
 <div id="fps"></div>
-<div id="embedLoader"><div class="text">loading<span class="dots"><span>.</span><span>.</span><span>.</span></span></div></div>
+<div id="embedLoader"><canvas id="embedLoaderCanvas" width="168" height="168"></canvas></div>
 
 <script>
 // ====================================================================
@@ -964,13 +1052,19 @@ function waitForLoadAndBuild() {
         console.error(e);
         setStatus(`<span class="err">✗ ${esc(e.message)}</span>`);
         // Embed mode hides #loadPanel entirely — surface the error in the
-        // centered loader text instead, and stop the fill at its current
-        // position so visitors see something happened rather than a stuck
-        // "loading" indicator forever. Auto-loaded /embed/<addr> URLs are
-        // the common failure path (typo in address, network blip).
+        // centered loader text instead, and stop the spinning sphere so
+        // visitors see something happened rather than a stuck loader
+        // forever. Auto-loaded /embed/<addr> URLs are the common failure
+        // path (typo in address, network blip).
         if (document.body.classList.contains('embed')) {
-          const txt = document.querySelector('#embedLoader .text');
-          if (txt) txt.textContent = `error: ${e.message}`;
+          const wrap = document.getElementById('embedLoader');
+          if (wrap) {
+            wrap.innerHTML = '';
+            const span = document.createElement('span');
+            span.style.cssText = 'font-size:12px;letter-spacing:.04em;color:#9a9aa5;';
+            span.textContent = `error: ${e.message}`;
+            wrap.appendChild(span);
+          }
         }
         btn.disabled = false;
         btn.textContent = LOAD_LABEL;
