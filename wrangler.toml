@@ -1,23 +1,9 @@
 # Wrangler config for the API Worker (api.dustopia.xyz).
-# Deploy with: `wrangler deploy`
-#
-# First-time setup:
-#   1. npm i -g wrangler  (or use npx wrangler)
-#   2. wrangler login     (browser-based auth, one-time)
-#   3. Set the Alchemy key as a secret (one-time):
-#      echo "<your-alchemy-key>" | wrangler secret put ALCHEMY_KEY
-#   4. wrangler deploy
-#
-# The KV namespace WALLET_CACHE was created via dashboard. To use the same one
-# from CLI, the namespace ID below must match. Get it via:
-#   wrangler kv:namespace list
+# Deploy with `wrangler deploy`. See README for first-time setup.
 
-# Worker is named `franken-api` in the Cloudflare dashboard. The Pages
-# project (frontend) is separately named `dustopia` — they're different
-# resources sharing only the brand. A Cloudflare-bot PR (#1) once tried
-# to "align" the Worker name with the Pages project name; rejected
-# because changing the Worker name here detaches api.dustopia.xyz from
-# the Worker that owns it (custom domain is bound to a specific Worker).
+# Worker name is fixed: api.dustopia.xyz custom domain is bound to this
+# Worker, renaming would detach the route. The Pages project name (dustopia)
+# is separate.
 name = "franken-api"
 main = "worker.js"
 compatibility_date = "2026-04-25"
@@ -39,17 +25,13 @@ enabled = true
 [observability.logs]
 enabled = true
 
-# KV binding — points to the WALLET_CACHE namespace already created in dashboard.
-# Replace the id with the actual namespace id (from `wrangler kv:namespace list`).
+# KV: wallet/ENS cache, owner lookups, rate-limit counters, preview-cap floors.
 [[kv_namespaces]]
 binding = "WALLET_CACHE"
 id      = "043aff23e1894533b81aaab958718377"
 
-# R2 binding — persistent atlas cache. Atlases are deterministic per
-# (wallet, GRID), so once built we store them forever and serve them on
-# every subsequent visit. Manual invalidation only (DELETE endpoint, future
-# Alchemy webhook on transfer). Bucket created via dashboard; public access
-# is OFF — all reads/writes go through the Worker.
+# R2: atlas binaries (keyed by addr+grid+selection-fingerprint), per-token
+# configs, captured preview WebPs. Public access OFF — all I/O via Worker.
 [[r2_buckets]]
 binding     = "ATLAS"
 bucket_name = "dustopia-atlas"

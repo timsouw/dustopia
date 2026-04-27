@@ -1,9 +1,9 @@
 # dustopia
 
-Living wallet portrait — every Ethereum address rendered as a 3D sphere of
-swirling NFT thumbnails, animated in real time. Open Edition NFT drop where the
-artwork stays alive: each token's `animation_url` shows the current holder's
-collection as a generative orb.
+Living wallet portrait. Every Ethereum address rendered as a 3D sphere of
+swirling NFT thumbnails, animated in real time. Open Edition NFT drop on
+OpenSea Drops where each token's `animation_url` shows the current holder's
+collection as a generative orb that updates with every wallet change.
 
 **Live**: <https://dustopia.xyz>
 
@@ -11,52 +11,58 @@ collection as a generative orb.
 
 ## Stack
 
-- **Frontend** (`index.html`) — single-file WebGL2 renderer. ~1300 lines of
-  HTML/CSS/JS/GLSL. No build step. Pure browser tech.
-- **Backend** (`worker.js`) — Cloudflare Worker that proxies the Alchemy NFT API,
-  hides the API key, and caches responses in KV. Deployed at `api.dustopia.xyz`.
-- **Hosting** — Cloudflare Pages (frontend) + Cloudflare Workers (backend) +
-  Cloudflare KV (cache).
+- **Frontend** — multiple self-contained HTML files (landing, sphere
+  renderer, configurator, playground). WebGL2 + GLSL, no build step.
+- **Worker** (`worker.js`) — Cloudflare Worker at `api.dustopia.xyz`.
+  Proxies Alchemy NFT API + ENS, serves ERC-721 metadata, persists per-token
+  configurations and atlas/preview captures in R2, verifies EIP-191
+  signatures via viem.
+- **Hosting** — Cloudflare Pages (frontend), Cloudflare Workers (API),
+  Cloudflare KV (cache), Cloudflare R2 (atlases + previews + configs).
 
 ## Repo layout
 
 ```
 .
-├── index.html         frontend, deployed to Cloudflare Pages
-├── worker.js          backend Worker proxy (Alchemy + ENS), deployed via wrangler
-├── wrangler.toml      Worker deploy config
-├── README.md          this file
-├── CLAUDE.md          full project context for AI assistants
+├── index.html             landing page
+├── embed/index.html       sphere renderer (the actual artwork)
+├── configure/index.html   per-token configurator (holders curate which NFTs render)
+├── play/index.html        shareable wallet-input page
+├── worker.js              Cloudflare Worker
+├── wrangler.toml          Worker deploy config
+├── _redirects             Pages routing
+├── _headers               CSP + security headers
+├── package.json           single dev dep: viem (signature verification)
+├── README.md              this file
+├── CLAUDE.md              project context for AI assistants
 └── .gitignore
 ```
 
 ## Local dev
 
-The frontend is a single HTML file. To preview locally:
+The frontend is plain HTML. To preview:
 
 ```bash
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-The Worker can be run locally via wrangler:
+Run the Worker locally:
 
 ```bash
 npx wrangler dev
 # Worker becomes available at http://localhost:8787
 ```
 
-To test the frontend against the local Worker, edit `index.html` and set:
-
-```js
-const API_URL = 'http://localhost:8787';
-```
+To point a local frontend at the local Worker, edit `API_URL` in the page
+you're working on (`embed/index.html` or `configure/index.html`).
 
 ## Deploy
 
-**Frontend** — auto-deploys on `git push` if connected to Cloudflare Pages.
+**Frontend** auto-deploys on push to `main` if the repo is connected to
+Cloudflare Pages.
 
-**Worker** — manual via wrangler:
+**Worker** is manual:
 
 ```bash
 npx wrangler deploy
@@ -71,9 +77,10 @@ echo "<your-alchemy-key>" | npx wrangler secret put ALCHEMY_KEY
 
 ## Environment
 
-- Alchemy NFT API v3 (Free tier currently — 25 req/sec rate limit)
-- ENS resolution via `api.ensideas.com` (no key needed)
-- Cloudflare KV cache: `WALLET_CACHE` (30min TTL for wallet data, 24h for ENS)
+- Alchemy NFT API v3 (Free tier currently)
+- ENS resolution via `api.ensideas.com` (no key)
+- Cloudflare KV: `WALLET_CACHE` (30 min wallet, 24 h ENS, 5 min preview)
+- Cloudflare R2: `dustopia-atlas` (atlas binaries, preview captures, per-token configs)
 
 ## License
 
