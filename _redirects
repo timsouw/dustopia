@@ -4,8 +4,10 @@
 /embed       /index.html       200
 /embed/*     /index.html       200
 
-# Configurator (owner-only editor for the dustopia NFT they hold). Same
-# rewrite trick as /embed so /configure/<tokenId> deep links work without
-# a hash, and the configure.html JS router parses the path.
-/configure   /configure.html   200
-/configure/* /configure.html   200
+# Configurator (owner-only editor for the dustopia NFT they hold).
+# configure/index.html is auto-served by Pages at /configure (no rewrite
+# needed — Pages handles directory index.html natively, which avoids the
+# .html→pretty-URL 308 loop the previous /configure.html rewrite caused).
+# Sub-paths /configure/<tokenId> still need an explicit rewrite so the
+# JS router on configure/index.html can parse them.
+/configure/* /configure/index.html 200
