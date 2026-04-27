@@ -1,11 +1,7 @@
-# Cloudflare Pages: serve index.html for /embed and /embed/<addr> so the
-# JS-side router can handle both clean URL forms. Status 200 = rewrite,
-# the URL bar keeps showing /embed/<addr>.
-/embed       /index.html       200
-/embed/*     /index.html       200
-
-# Configurator (owner-only editor for the dustopia NFT they hold). Same
-# rewrite trick as /embed so /configure/<tokenId> deep links work without
-# a hash, and the configure.html JS router parses the path.
-/configure   /configure.html   200
-/configure/* /configure.html   200
+# Cloudflare Pages serves directory index.html natively for /foo when
+# foo/index.html exists, so the bare /embed and /configure URLs need no
+# explicit rewrite. The wildcards below catch sub-paths so the JS-side
+# router on each page can parse /embed/<addr> and /configure/<tokenId>
+# deep links without a hash. Status 200 = rewrite (URL bar unchanged).
+/embed/*     /embed/index.html      200
+/configure/* /configure/index.html  200

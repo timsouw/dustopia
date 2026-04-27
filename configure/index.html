@@ -180,6 +180,24 @@
   .tree-status { font-size:11px; color:#9a9aa5; padding:4px 0; }
   body.light .tree-status { color:#71717a; }
 
+  .cap-warning {
+    font-size:11px; line-height:1.5; color:#fbbf24;
+    background:rgba(251, 191, 36, 0.08);
+    border:1px solid rgba(251, 191, 36, 0.25);
+    padding:10px 12px; border-radius:8px;
+  }
+  .cap-warning strong { color:#f59e0b; font-weight:600; }
+  .cap-warning b { color:#e7e7ea; font-weight:600; }
+  .cap-warning em { color:#cfd1d7; font-style:normal; font-weight:500; }
+  body.light .cap-warning {
+    color:#92400e;
+    background:rgba(245, 158, 11, 0.08);
+    border-color:rgba(245, 158, 11, 0.25);
+  }
+  body.light .cap-warning strong { color:#b45309; }
+  body.light .cap-warning b      { color:#18181b; }
+  body.light .cap-warning em     { color:#27272a; }
+
   .tree {
     flex:1; min-height:0; overflow:auto;
     border-top:1px solid rgba(255,255,255,.06); padding-top:8px;
@@ -587,6 +605,7 @@ async function loadEditorData() {
   editor.selected = new Set();
   editor.expanded = new Set();
   editor.loadError = null;
+  editor.totalNftsInWallet = 0;
   // Mount the editor shell with a placeholder iframe (no selection yet, so
   // the iframe boots against the saved config). We swap the iframe src once
   // we know the canonical hydrated selection — that's at most one extra
@@ -598,6 +617,7 @@ async function loadEditorData() {
       fetchEntireWallet(state.address),
     ]);
     editor.config = cfgRes || { tokenId: Number(editor.tokenId), selection: { mode: 'all', collections: [], tokens: [] } };
+    editor.totalNftsInWallet = walletNfts.length;
     editor.byCollection = groupByCollection(walletNfts);
     editor.collectionsList = [...editor.byCollection.keys()];
     editor.mode = editor.config.selection?.mode === 'subset' ? 'subset' : 'all';
@@ -686,6 +706,10 @@ function refreshSidebar() {
   wireSidebar();
 }
 
+// Hard cap on tokens that go into a single sphere. Mirrors MAX_TOKENS in
+// the renderer (embed/index.html) and ATLAS_TOKEN_LIMIT in worker.js.
+const SPHERE_TOKEN_CAP = 1024;
+
 function renderSidebar() {
   if (editor.loadError) {
     return `<div class="status-line err">load failed: ${esc(editor.loadError)}</div>`;
@@ -694,7 +718,18 @@ function renderSidebar() {
     return `<div class="status-line">No NFTs in this wallet (or all filtered as spam).</div>`;
   }
   const subsetActive = editor.mode === 'subset';
+  // If the wallet holds more than the hard cap, surface that up-front so
+  // the holder knows the "Show all" option is actually capped at 1024 and
+  // they probably want to switch to "Pick subset" to choose which ones go in.
+  const overCap = editor.totalNftsInWallet > SPHERE_TOKEN_CAP;
+  const capBanner = overCap ? `
+    <div class="cap-warning">
+      <strong>Heads up:</strong> this wallet holds <b>${editor.totalNftsInWallet.toLocaleString()}</b> NFTs.
+      A sphere can render at most <b>${SPHERE_TOKEN_CAP.toLocaleString()}</b>. In <em>Show all</em> mode the first
+      ${SPHERE_TOKEN_CAP.toLocaleString()} are picked automatically — switch to <em>Pick subset</em> to choose which ones.
+    </div>` : '';
   return `
+    ${capBanner}
     <div class="mode-toggle" id="modeToggle">
       <button data-mode="all"    class="${editor.mode === 'all'    ? 'active' : ''}">Show all</button>
       <button data-mode="subset" class="${editor.mode === 'subset' ? 'active' : ''}">Pick subset</button>
@@ -710,10 +745,21 @@ function renderSidebar() {
 
 function treeStatusText() {
   if (editor.mode === 'all') {
+    if (editor.totalNftsInWallet > SPHERE_TOKEN_CAP) {
+      return `Wallet has ${editor.totalNftsInWallet.toLocaleString()} NFTs — sphere will render the first ${SPHERE_TOKEN_CAP.toLocaleString()}. Switch to subset to choose.`;
+    }
     return 'In "show all", every NFT in this wallet is rendered. Switch to subset to pick.';
   }
   const totalTokens = [...editor.byCollection.values()].reduce((n, c) => n + c.tokens.length, 0);
-  return `${editor.selected.size} / ${totalTokens} tokens selected · ${editor.collectionsList.length} collections in wallet`;
+  const sel = editor.selected.size;
+  // Soft warning when the user has selected more than the hard cap.
+  // The renderer slices to 1024 silently; flag it here so the holder
+  // knows their extras won't render. Plain text only — this string is
+  // rendered via .textContent on subsequent updates.
+  const capNote = sel > SPHERE_TOKEN_CAP
+    ? `  ⚠ ${sel - SPHERE_TOKEN_CAP} over cap, won't render`
+    : '';
+  return `${sel} / ${totalTokens} tokens selected · ${editor.collectionsList.length} collections${capNote}`;
 }
 
 function saveSummaryText() {
