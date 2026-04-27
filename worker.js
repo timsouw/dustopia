@@ -437,10 +437,11 @@ async function handlePreview(rawTokenId, request, env, ctx) {
   if (obj) {
     const headers = new Headers({
       'Access-Control-Allow-Origin': '*',
-      // Short TTL so re-captures (after a wallet's holdings change) propagate
-      // within an hour to marketplaces. The edge cache layer above handles
-      // the high-RPS amortization.
-      'Cache-Control':               'public, max-age=3600',
+      // 5 min TTL — short enough that a holder's "Save" in /configure
+      // propagates fast to the landing + marketplace caches. We also
+      // explicitly purge the edge cache on save, so 5 min is just the
+      // floor for downstream caches we don't control.
+      'Cache-Control':               'public, max-age=300',
       'X-Edge-Cache':                'MISS',
     });
     obj.writeHttpMetadata(headers);
@@ -454,19 +455,19 @@ async function handlePreview(rawTokenId, request, env, ctx) {
 
   // No captured preview yet — serve the animated SVG so marketplace grids at
   // least show something living until the first /embed visitor seeds R2.
+  // We deliberately DO NOT edge-cache this response: holders saving a new
+  // selection delete preview/<addr>.bin and rely on the next /embed visit
+  // re-uploading. If we cached the SVG here, that fresh upload would be
+  // shadowed by the cached SVG until max-age expired.
   const svg = previewSvg(tokenId);
-  const resp = new Response(svg, {
+  return new Response(svg, {
     headers: {
       'Content-Type':                'image/svg+xml; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
-      // Shorter than the WebP path: we WANT marketplaces to re-fetch fast
-      // once a real capture lands.
-      'Cache-Control':               'public, max-age=300',
-      'X-Edge-Cache':                'MISS',
+      'Cache-Control':               'public, max-age=60',
+      'X-Edge-Cache':                'BYPASS',
     },
   });
-  if (ctx) ctx.waitUntil(cache.put(cacheKey, resp.clone()));
-  return resp;
 }
 
 // =====================================================================
@@ -1028,7 +1029,7 @@ async function handleConfigGet(tokenId, request, env) {
   });
 }
 
-async function handleConfigPut(tokenId, request, env) {
+async function handleConfigPut(tokenId, request, env, ctx) {
   // Strict body cap — config payloads are tiny (a few KB at most).
   const lenHdr = request.headers.get('Content-Length');
   if (!lenHdr) return errorResponse(411, 'Content-Length required', request);
@@ -1091,6 +1092,24 @@ async function handleConfigPut(tokenId, request, env) {
   await env.ATLAS.put(configKey(tokenId), JSON.stringify(stored), {
     httpMetadata: { contentType: 'application/json; charset=utf-8' },
   });
+
+  // Stale-preview invalidation. The owner's previous preview-cap WebP no
+  // longer reflects what the sphere will render with the new selection,
+  // so wipe the R2 entry AND the edge-cache copy of /api/preview/<id>.
+  // Both are best-effort — if a delete fails the worst case is OpenSea
+  // sees a stale frame for up to 1 hour (Cache-Control max-age) until
+  // the next /embed visitor seeds a fresh capture.
+  if (ctx) {
+    const previewKey = `preview/${parsed.owner}.bin`;
+    const previewUrl = new URL(request.url);
+    previewUrl.pathname = `/api/preview/${tokenId}`;
+    previewUrl.search = '';
+    ctx.waitUntil((async () => {
+      await env.ATLAS.delete(previewKey).catch(() => {});
+      await caches.default.delete(new Request(previewUrl.toString())).catch(() => {});
+    })());
+  }
+
   return jsonResponse({ ok: true, savedAt: stored.savedAt }, request);
 }
 
@@ -1100,7 +1119,7 @@ async function handleConfig(rawTokenId, request, env, ctx) {
     return errorResponse(400, 'invalid token id', request);
   }
   if (request.method === 'GET')    return handleConfigGet(tokenId, request, env);
-  if (request.method === 'PUT')    return handleConfigPut(tokenId, request, env);
+  if (request.method === 'PUT')    return handleConfigPut(tokenId, request, env, ctx);
   if (request.method === 'DELETE') {
     // Internal-only via webhook; reject direct calls to avoid griefing.
     return errorResponse(405, 'use /api/webhook/transfer', request);
