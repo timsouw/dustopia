@@ -198,6 +198,154 @@
     color:inherit;
     border-bottom:1px solid currentColor;
   }
+
+  /* ── Player view ────────────────────────────────────────────
+     Two columns: thin sidebar on the left with collection picker,
+     iframe on the right. Stacks on narrow viewports. */
+  #player-view {
+    display:grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    gap:18px;
+    width:100%;
+    max-width:1240px;
+    margin:0 auto;
+    padding:18px 24px 36px;
+    align-items:stretch;
+  }
+  #player-view[hidden] { display:none; }
+  @media (max-width: 880px) {
+    #player-view {
+      grid-template-columns: 1fr;
+      padding:14px 18px 36px;
+    }
+  }
+
+  .player-side {
+    display:flex; flex-direction:column;
+    gap:12px;
+    min-height:0;
+  }
+  .player-head {
+    display:flex; align-items:center; justify-content:space-between;
+    gap:8px;
+  }
+  .back-btn {
+    background:transparent; border:0;
+    color:inherit; cursor:pointer;
+    padding:6px 8px;
+    font:inherit; font-size:12px; letter-spacing:.02em;
+    color:#9a9aa5;
+    transition:color 120ms;
+  }
+  .back-btn:hover { color:#e7e7ea; }
+  body.light .back-btn { color:#71717a; }
+  body.light .back-btn:hover { color:#18181b; }
+  .player-addr {
+    font-size:11px; letter-spacing:.04em; color:#7a7a85;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  body.light .player-addr { color:#71717a; }
+
+  .mode-toggle {
+    display:flex; gap:4px;
+    padding:3px; border-radius:8px;
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.08);
+  }
+  body.light .mode-toggle {
+    background:#fff;
+    border-color:rgba(0,0,0,.08);
+  }
+  .mode-toggle button {
+    flex:1;
+    padding:7px 10px; border-radius:6px;
+    background:transparent; border:0;
+    color:#9a9aa5; cursor:pointer;
+    font:inherit; font-size:12px; font-weight:500; letter-spacing:-0.005em;
+    transition:background 120ms, color 120ms;
+  }
+  .mode-toggle button.active {
+    background:rgba(255,255,255,.08);
+    color:#e7e7ea;
+  }
+  body.light .mode-toggle button { color:#71717a; }
+  body.light .mode-toggle button.active {
+    background:#18181b; color:#fafafa;
+  }
+
+  .player-status {
+    font-size:11px; letter-spacing:.02em; color:#7a7a85;
+    min-height:1em;
+  }
+  body.light .player-status { color:#71717a; }
+
+  .coll-list {
+    flex:1;
+    overflow-y:auto;
+    padding-right:4px;
+    border-top:1px solid rgba(255,255,255,.06);
+    padding-top:8px;
+    /* Cap height on desktop so the list scrolls instead of pushing the
+       iframe. On mobile we fall back to the natural flow under the iframe. */
+    max-height:min(60vh, 480px);
+  }
+  body.light .coll-list { border-top-color:rgba(0,0,0,.08); }
+  .coll-row {
+    display:flex; align-items:center; gap:8px;
+    padding:7px 4px;
+    cursor:pointer;
+    border-radius:5px;
+    transition:background 120ms;
+  }
+  .coll-row:hover { background:rgba(255,255,255,.04); }
+  body.light .coll-row:hover { background:rgba(0,0,0,.03); }
+  .coll-list.disabled .coll-row { opacity:.4; pointer-events:none; }
+  .coll-cb {
+    width:14px; height:14px; flex-shrink:0;
+    border:1.5px solid rgba(255,255,255,.30);
+    border-radius:3px;
+    display:inline-flex; align-items:center; justify-content:center;
+    color:#101217;
+  }
+  body.light .coll-cb { border-color:rgba(0,0,0,.30); color:#fafafa; }
+  .coll-cb.checked {
+    background:#e7e7ea;
+    border-color:#e7e7ea;
+  }
+  body.light .coll-cb.checked { background:#18181b; border-color:#18181b; }
+  .coll-cb.checked::after {
+    content:"\2713";
+    font-size:10px; line-height:1;
+  }
+  .coll-name {
+    flex:1; min-width:0;
+    font-size:13px; letter-spacing:-0.005em;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .coll-count {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:10.5px; color:#7a7a85;
+  }
+  body.light .coll-count { color:#71717a; }
+
+  .player-frame {
+    border-radius:14px;
+    overflow:hidden;
+    background:#14141a;
+    border:1px solid rgba(255,255,255,.06);
+    aspect-ratio:1 / 1;
+    /* Hard cap so the player-view doesn't push the page taller than the
+       viewport on big monitors. */
+    max-height:calc(100vh - 130px);
+  }
+  body.light .player-frame {
+    background:#e9e9ec;
+    border-color:rgba(0,0,0,.06);
+  }
+  .player-frame iframe {
+    width:100%; height:100%;
+    border:0; display:block;
+  }
 </style>
 </head>
 <body class="light">
@@ -220,13 +368,13 @@
 </header>
 
 <main>
-  <div class="wrap card">
+  <div class="wrap card" id="input-view">
     <span class="label">try it</span>
     <h1 style="margin-top:14px;">See any wallet as a sphere.</h1>
     <p class="lead">
-      Paste an Ethereum address or ENS name. dustopia will fetch the wallet's
-      NFTs and render them as a 3D sphere you can drag, zoom and explore.
-      No connection, no signing, no minting required.
+      Mint a Dustopia and your sphere becomes a living portrait of your own
+      wallet. Until then, drop in any Ethereum address or ENS below to peek
+      at someone else's collection. No connection, no signing, no minting.
     </p>
 
     <form class="form-row" id="goForm" autocomplete="off">
@@ -248,11 +396,29 @@
     </div>
 
     <p class="footnote">
-      Tip: wallets with hundreds of NFTs take a few seconds to load (the renderer
-      caches the result so a second visit is instant). Big collectors like
-      <span class="mono">vitalik.eth</span> are a good demo of how the sphere
-      handles density.
+      Tip: wallets with hundreds of NFTs take a few seconds to load. Big
+      collectors like <span class="mono">vitalik.eth</span> are a good demo
+      of how the sphere handles density. Wallets opened from here aren't
+      cached server-side, so each visit re-fetches.
     </p>
+  </div>
+
+  <div id="player-view" hidden>
+    <aside class="player-side" id="playerSide">
+      <div class="player-head">
+        <button type="button" id="backBtn" class="back-btn" aria-label="back">&larr; back</button>
+        <span class="player-addr mono" id="playerAddr"></span>
+      </div>
+      <div class="mode-toggle" id="modeToggle">
+        <button type="button" data-mode="all"    class="active">Show all</button>
+        <button type="button" data-mode="subset">Pick subset</button>
+      </div>
+      <div class="player-status" id="playerStatus"></div>
+      <div class="coll-list" id="collList"></div>
+    </aside>
+    <div class="player-frame">
+      <iframe id="playerFrame" title="dustopia sphere"></iframe>
+    </div>
   </div>
 </main>
 
@@ -328,6 +494,57 @@
     list.appendChild(btn);
   }
 
+  // Worker base for /api/wallet calls. Prod = api.dustopia.xyz; for local
+  // wrangler dev override here. Keeping inline so the file stays buildless.
+  const API_URL = 'https://api.dustopia.xyz';
+
+  // Player-view state. `addr` is the raw input (may be ENS); `resolved` is
+  // the 0x form used for /api/wallet calls. `byCollection` is populated
+  // asynchronously after the iframe is already rendering — the sphere shows
+  // the full wallet by default, and the picker just trims it once the
+  // collection list arrives.
+  const state = {
+    addr:         null,
+    resolved:     null,
+    byCollection: null,
+    mode:         'all',
+    selected:     new Set(),
+    loadGen:      0,           // cancels in-flight fetches when addr changes
+  };
+  // currentAddr remains for the hashchange equality check; it shadows
+  // state.addr but is set/cleared by setView() while state mutates inside
+  // the async loadAddr() flow.
+  let currentAddr = null;
+
+  // Switch between the input panel and the sphere+picker view. Single
+  // source of truth: location.hash. Calling setView() also reflects the
+  // hash so the view is shareable / reload-safe.
+  // - 'input'        → /play   (clear hash)
+  // - 'player', addr → /play#<addr>  (hashchange triggers loadAddr)
+  function setView(view, addr) {
+    const inputEl  = document.getElementById('input-view');
+    const playerEl = document.getElementById('player-view');
+    if (view === 'player') {
+      inputEl.hidden  = true;
+      playerEl.hidden = false;
+      if (location.hash !== '#' + addr) {
+        // History entry so Back button in the browser returns to /play.
+        history.pushState(null, '', '#' + addr);
+      }
+      document.getElementById('playerAddr').textContent = addr;
+      currentAddr = addr;
+    } else {
+      inputEl.hidden  = false;
+      playerEl.hidden = true;
+      // Drop the hash entirely so the URL is clean.
+      if (location.hash) history.pushState(null, '', location.pathname);
+      // Free the iframe so the previous wallet stops eating memory.
+      const fr = document.getElementById('playerFrame');
+      if (fr) fr.removeAttribute('src');
+      currentAddr = null;
+    }
+  }
+
   function go(raw) {
     const v = normalize(raw);
     const err = document.getElementById('formError');
@@ -336,10 +553,188 @@
       return;
     }
     err.textContent = '';
-    // Disable button + redirect. The /embed page does its own loading UI,
-    // so we don't need a spinner here — just hand off.
-    document.getElementById('goBtn').disabled = true;
-    window.location.href = `/embed/${encodeURIComponent(v)}`;
+    setView('player', v);
+    loadAddr(v);
+  }
+
+  // Resolve ENS via the Worker, then page through /api/wallet to build a
+  // collection-name + token-count map. The iframe renders in parallel —
+  // the picker just becomes interactive once data lands. loadGen is bumped
+  // on every call so an in-flight fetch from a previous wallet that's
+  // still resolving when the user clicks a different preset gets ignored.
+  async function loadAddr(addr) {
+    state.loadGen += 1;
+    const gen = state.loadGen;
+    state.addr         = addr;
+    state.resolved     = null;
+    state.byCollection = null;
+    state.mode         = 'all';
+    state.selected     = new Set();
+
+    // Fire the iframe immediately so the user sees something paint while
+    // we walk the wallet pages. nocache=1 keeps R2 clean of random plays.
+    const fr = document.getElementById('playerFrame');
+    fr.src = `/embed/${encodeURIComponent(addr)}?nocache=1`;
+
+    syncSidebarMode();    // grey out the list until data arrives
+    setStatus('resolving wallet…');
+
+    try {
+      const resolved = await resolve0x(addr);
+      if (gen !== state.loadGen) return;   // user moved on
+      state.resolved = resolved;
+
+      setStatus('fetching tokens…');
+      const nfts = await fetchEntireWallet(resolved);
+      if (gen !== state.loadGen) return;
+
+      state.byCollection = groupByCollection(nfts);
+      // Default subset = everything, so flipping into "Pick subset" doesn't
+      // immediately wipe the sphere.
+      state.selected = new Set(state.byCollection.keys());
+      setStatus(`${nfts.length} tokens · ${state.byCollection.size} collections`);
+      renderCollList();
+    } catch (e) {
+      if (gen !== state.loadGen) return;
+      console.warn('[play] load failed', e);
+      setStatus('couldn’t load this wallet — the sphere above still works.');
+    }
+  }
+
+  function setStatus(text) {
+    document.getElementById('playerStatus').textContent = text || '';
+  }
+
+  // ENS → 0x via Worker. If the input is already a 0x address, return it
+  // unchanged. Failure throws so the caller can show an error.
+  async function resolve0x(input) {
+    if (/^0x[0-9a-f]{40}$/.test(input)) return input;
+    const r = await fetch(`${API_URL}/api/ens/${encodeURIComponent(input)}`);
+    if (!r.ok) throw new Error(`ENS resolve HTTP ${r.status}`);
+    const j = await r.json();
+    const addr = (j.address || j.resolved || '').toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(addr)) throw new Error('ENS returned no address');
+    return addr;
+  }
+
+  // Walk /api/wallet pages until pageKey runs out or we hit a sane cap.
+  // ?spam=include surfaces flagged-by-Alchemy collections too — for the
+  // playground we want the holder's full picture, same rationale as the
+  // configurator.
+  async function fetchEntireWallet(addr) {
+    const out = [];
+    let pageKey = '';
+    const MAX_PAGES = 60;
+    for (let p = 0; p < MAX_PAGES; p++) {
+      const u = new URL(`${API_URL}/api/wallet/${addr}`);
+      u.searchParams.set('spam', 'include');
+      if (pageKey) u.searchParams.set('pageKey', pageKey);
+      const r = await fetch(u);
+      if (!r.ok) throw new Error(`wallet HTTP ${r.status}`);
+      const j = await r.json();
+      if (Array.isArray(j.ownedNfts)) out.push(...j.ownedNfts);
+      if (!j.pageKey) break;
+      pageKey = j.pageKey;
+    }
+    return out;
+  }
+
+  // Map<contract, { name, count }> ordered by appearance. Empty/unknown
+  // contracts are skipped; that's the same hygiene the renderer applies.
+  function groupByCollection(nfts) {
+    const m = new Map();
+    for (const n of nfts) {
+      const c = ((n.contract && n.contract.address) || '').toLowerCase();
+      if (!/^0x[0-9a-f]{40}$/.test(c)) continue;
+      const name = (n.contract && (n.contract.openSeaMetadata?.collectionName
+                                  || n.contract.name)) || 'Untitled collection';
+      if (!m.has(c)) m.set(c, { name, count: 0 });
+      m.get(c).count += 1;
+    }
+    return m;
+  }
+
+  // ── Sidebar render ───────────────────────────────────────────
+  // The list shows a row per collection sorted by token count desc, with
+  // a checkbox that toggles inclusion in 'subset' mode. In 'all' mode the
+  // checkboxes are visible but greyed (so the user can preview what's in
+  // the wallet before deciding to curate).
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+    ));
+  }
+
+  function renderCollList() {
+    const list = document.getElementById('collList');
+    if (!state.byCollection) {
+      list.innerHTML = '';
+      return;
+    }
+    const arr = [...state.byCollection.entries()].sort((a, b) => {
+      const dc = b[1].count - a[1].count;
+      if (dc !== 0) return dc;
+      return a[1].name.toLowerCase().localeCompare(b[1].name.toLowerCase());
+    });
+    const rows = arr.map(([contract, info]) => {
+      const checked = state.selected.has(contract);
+      return `
+        <div class="coll-row" data-contract="${escapeHtml(contract)}">
+          <span class="coll-cb${checked ? ' checked' : ''}"></span>
+          <span class="coll-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</span>
+          <span class="coll-count">${info.count}</span>
+        </div>`;
+    }).join('');
+    list.innerHTML = rows || '<div class="player-status">No collections.</div>';
+  }
+
+  // Apply / strip the .disabled class on the list to reflect 'all' vs
+  // 'subset'. Also updates the .active state on the mode-toggle buttons.
+  function syncSidebarMode() {
+    const list = document.getElementById('collList');
+    list.classList.toggle('disabled', state.mode !== 'subset');
+    const buttons = document.querySelectorAll('#modeToggle button');
+    for (const b of buttons) {
+      b.classList.toggle('active', b.dataset.mode === state.mode);
+    }
+  }
+
+  // Mode toggle wiring.
+  document.getElementById('modeToggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    state.mode = btn.dataset.mode;
+    syncSidebarMode();
+    syncIframe();
+  });
+
+  // Collection click toggles its membership in the subset.
+  document.getElementById('collList').addEventListener('click', (e) => {
+    const row = e.target.closest('.coll-row');
+    if (!row) return;
+    if (state.mode !== 'subset') return;     // ignore clicks in 'all' mode
+    const contract = row.dataset.contract;
+    if (state.selected.has(contract)) state.selected.delete(contract);
+    else                              state.selected.add(contract);
+    renderCollList();
+    syncIframe();
+  });
+
+  // Push the current selection into the iframe via ?sel=. Debounced via
+  // requestAnimationFrame so a rapid toggle doesn't trigger N reloads.
+  let _syncRaf = 0;
+  function syncIframe() {
+    if (_syncRaf) cancelAnimationFrame(_syncRaf);
+    _syncRaf = requestAnimationFrame(() => {
+      _syncRaf = 0;
+      const fr = document.getElementById('playerFrame');
+      if (!fr || !state.addr) return;
+      const sel = (state.mode === 'all' || !state.byCollection)
+        ? { mode: 'all', collections: [], tokens: [] }
+        : { mode: 'subset', collections: [...state.selected], tokens: [] };
+      const enc = btoa(JSON.stringify(sel));
+      fr.src = `/embed/${encodeURIComponent(state.addr)}?nocache=1&sel=${encodeURIComponent(enc)}&t=${Date.now()}`;
+    });
   }
 
   document.getElementById('goForm').addEventListener('submit', (e) => {
@@ -347,13 +742,26 @@
     go(document.getElementById('addrInput').value);
   });
 
-  // If someone lands here with `#vitalik.eth` already in the URL, kick
-  // straight into the embed. Saves a click for power users who just
-  // bookmark /play.
-  (function() {
-    const h = location.hash.replace(/^#/, '');
-    if (h && looksValid(normalize(h))) go(h);
-  })();
+  document.getElementById('backBtn').addEventListener('click', () => {
+    setView('input');
+  });
+
+  // Hash routing. Initial load + browser back/forward both come through
+  // hashchange (the initial fire is synthetic, see the IIFE at the bottom).
+  function syncFromHash() {
+    const h = decodeURIComponent(location.hash.replace(/^#/, ''));
+    const v = normalize(h);
+    if (v && looksValid(v)) {
+      if (v !== currentAddr) {
+        setView('player', v);
+        loadAddr(v);
+      }
+    } else {
+      setView('input');
+    }
+  }
+  window.addEventListener('hashchange', syncFromHash);
+  syncFromHash();
 </script>
 
 </body>

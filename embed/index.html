@@ -202,6 +202,10 @@
     // override instead of fetching the saved config. Atlas upload is also
     // skipped — we don't want preview drafts polluting R2 caches.
     if (params.get('preview') === '1') window.__dustopiaPreview = true;
+    // Playground mode: /play frames the embed with ?nocache=1 so random
+    // wallets people paste in don't pollute the R2 atlas / preview-cap
+    // caches. Atlas upload + preview capture both gated on this below.
+    if (params.get('nocache') === '1') window.__dustopiaNocache = true;
     const selRaw = params.get('sel');
     if (selRaw) {
       try {
@@ -1207,7 +1211,7 @@ async function buildLiveData(input) {
   // upload would block first paint by ~5-30s for large wallets — not worth
   // it. Failures are logged and otherwise ignored. Skipped in preview mode
   // so editor drafts don't pollute the public cache.
-  if (!window.__dustopiaPreview) uploadAtlas(addr, meta, atlasBlob, fp);
+  if (!window.__dustopiaPreview && !window.__dustopiaNocache) uploadAtlas(addr, meta, atlasBlob, fp);
   return { meta, atlasData, atlasW, atlasH, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false, selection, fp };
 }
 
@@ -1292,7 +1296,7 @@ async function main() {
   // if R2 already has a capture for this wallet (HEAD check inside) and
   // skipped entirely in editor preview mode so drafts don't overwrite
   // the canonical OpenSea grid image.
-  if (!window.__dustopiaPreview) {
+  if (!window.__dustopiaPreview && !window.__dustopiaNocache) {
     setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, PREVIEW_DELAY_MS);
   }
 
