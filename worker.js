@@ -262,73 +262,6 @@ async function handleOwned(addr, request, env) {
   return jsonResponse(body, request, { headers: { 'X-Cache': 'MISS' } });
 }
 
-// =====================================================================
-// FLOOR PRICES — batched Alchemy getFloorPrice calls for the
-// configurator's "sort by floor" dropdown. We accept a comma-separated
-// contract list, fan out one Alchemy call per contract (Alchemy doesn't
-// expose a batch endpoint for floors), KV-cache each result for 30 min,
-// and return a flat { floors: { <contract>: { price, currency } } } map.
-//
-// Each contract result reflects OpenSea's floor in ETH where available.
-// Alchemy returns 0 / null for collections with no marketplace data
-// (mint-still-open, illiquid, or not indexed) — we surface those as
-// `{ price: null, currency: null }` so the frontend can sort them last.
-// =====================================================================
-const FLOOR_TTL          = 30 * 60;     // 30 min — floor prices are noisy at minute scale
-const FLOOR_MAX_BATCH    = 64;          // hard cap so a malicious caller can't fan out 1000 alchemy calls
-const FLOOR_CONTRACT_RE  = /^0x[0-9a-fA-F]{40}$/;
-
-async function alchemyFloorOne(contract, env) {
-  const cacheKey = `floor:${contract.toLowerCase()}`;
-  const cached = await env.WALLET_CACHE.get(cacheKey);
-  if (cached) {
-    try { return JSON.parse(cached); } catch { /* fall through to refetch */ }
-  }
-  const u = new URL(`https://eth-mainnet.g.alchemy.com/nft/v3/${env.ALCHEMY_KEY}/getFloorPrice`);
-  u.searchParams.set('contractAddress', contract);
-  let json;
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), ALCH_TIMEOUT_MS);
-    const r = await fetch(u.toString(), { signal: ctrl.signal });
-    clearTimeout(timer);
-    if (!r.ok) return { price: null, currency: null };
-    json = await r.json();
-  } catch { return { price: null, currency: null }; }
-  // Alchemy returns marketplace-keyed shape: { openSea: {...}, looksRare: {...} }.
-  // Prefer OpenSea, fall back to LooksRare. Skip "error" entries.
-  const pickFrom = (entry) => {
-    if (!entry || entry.error) return null;
-    const p = Number(entry.floorPrice);
-    return Number.isFinite(p) && p > 0 ? { price: p, currency: entry.priceCurrency || 'ETH' } : null;
-  };
-  const out = pickFrom(json.openSea) || pickFrom(json.looksRare) || { price: null, currency: null };
-  env.WALLET_CACHE.put(cacheKey, JSON.stringify(out), { expirationTtl: FLOOR_TTL }).catch(() => {});
-  return out;
-}
-
-async function handleFloor(request, env) {
-  const url = new URL(request.url);
-  const raw = url.searchParams.get('contracts') || '';
-  if (!raw) return errorResponse(400, 'contracts query param required', request);
-  const contracts = raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-  if (!contracts.length) return errorResponse(400, 'no contracts', request);
-  if (contracts.length > FLOOR_MAX_BATCH) {
-    return errorResponse(400, `too many contracts (max ${FLOOR_MAX_BATCH})`, request);
-  }
-  for (const c of contracts) {
-    if (!FLOOR_CONTRACT_RE.test(c)) return errorResponse(400, `invalid contract: ${c}`, request);
-  }
-  // Fan out in parallel. Each per-contract call is KV-cached so on a
-  // warm wallet most of these resolve instantly without touching Alchemy.
-  const results = await Promise.all(contracts.map(c => alchemyFloorOne(c, env)));
-  const floors = {};
-  for (let i = 0; i < contracts.length; i++) floors[contracts[i]] = results[i];
-  return jsonResponse({ floors }, request, {
-    headers: { 'Cache-Control': 'public, max-age=300' },  // 5 min edge cache
-  });
-}
-
 // The drop contract's baseURI is set to https://api.dustopia.xyz/api/metadata/
 // so tokenURI(N) becomes /api/metadata/N. We respond with a standard ERC-721
 // metadata JSON whose animation_url loads the live sphere of the token's
@@ -1394,11 +1327,6 @@ export default {
     const ownedMatch = path.match(/^\/api\/owned\/([^/]+)\/?$/);
     if (ownedMatch) {
       return handleOwned(ownedMatch[1], request, env);
-    }
-
-    // /api/floor?contracts=<csv> — batched OpenSea/LooksRare floors
-    if (path === '/api/floor') {
-      return handleFloor(request, env);
     }
 
     return errorResponse(404, 'not found', request);

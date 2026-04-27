@@ -188,8 +188,6 @@
   }
   .sort-row select:focus { border-color:#e7e7ea; }
   body.light .sort-row select:focus { border-color:#18181b; }
-  .sort-row .pending { font-size:10px; color:#fbbf24; letter-spacing:.04em; }
-  body.light .sort-row .pending { color:#b45309; }
 
   .search-input {
     width:100%; padding:8px 12px; border-radius:8px;
@@ -515,9 +513,7 @@ const editor = {
   config:         null,                  // saved selection (or default)
   byCollection:   new Map(),             // contract -> { name, tokens: [{tokenId, image, name}] }
   collectionsList:[],                    // ordered contracts (post-sort)
-  sortMode:       'count-desc',          // count-desc | count-asc | floor-desc | floor-asc
-  floorByContract:null,                  // null until 'floor-*' selected; then Map<contract, {price, currency}>
-  floorLoading:   false,
+  sortMode:       'count-desc',          // count-desc | count-asc
   mode:           'all',
   selected:       new Set(),             // "contract:tokenId"
   expanded:       new Set(),             // expanded contract addrs
@@ -633,78 +629,22 @@ function serializeSelection(byCollection, selected, mode) {
 }
 
 // Re-orders editor.collectionsList according to editor.sortMode. Pure
-// function over the current state — call after sortMode flips, after
-// floor data lands, or whenever byCollection changes. We keep
-// alphabetical as the deterministic tie-breaker so equal-count or
-// missing-floor collections don't swap places between renders.
+// function over the current state — call after sortMode flips or
+// whenever byCollection changes. Alphabetical name is the deterministic
+// tie-breaker so equal-count collections don't swap places between renders.
 function sortedCollectionList() {
   const arr = [...editor.byCollection.keys()];
   const mode = editor.sortMode || 'count-desc';
   const cmpName = (a, b) => editor.byCollection.get(a).name.toLowerCase()
     .localeCompare(editor.byCollection.get(b).name.toLowerCase());
-  if (mode === 'count-asc' || mode === 'count-desc') {
-    const dir = mode === 'count-desc' ? -1 : 1;
-    arr.sort((a, b) => {
-      const da = editor.byCollection.get(a).tokens.length;
-      const db = editor.byCollection.get(b).tokens.length;
-      if (da !== db) return (da - db) * dir;
-      return cmpName(a, b);
-    });
-  } else if (mode === 'floor-desc' || mode === 'floor-asc') {
-    const dir = mode === 'floor-desc' ? -1 : 1;
-    const floor = editor.floorByContract;
-    arr.sort((a, b) => {
-      const fa = floor && floor.get(a) ? floor.get(a).price : null;
-      const fb = floor && floor.get(b) ? floor.get(b).price : null;
-      // Collections with no floor data sink to the bottom regardless
-      // of dir — they're either mint-still-open, illiquid, or unknown.
-      if (fa == null && fb == null) return cmpName(a, b);
-      if (fa == null) return 1;
-      if (fb == null) return -1;
-      if (fa !== fb) return (fa - fb) * dir;
-      return cmpName(a, b);
-    });
-  }
+  const dir = mode === 'count-asc' ? 1 : -1;
+  arr.sort((a, b) => {
+    const da = editor.byCollection.get(a).tokens.length;
+    const db = editor.byCollection.get(b).tokens.length;
+    if (da !== db) return (da - db) * dir;
+    return cmpName(a, b);
+  });
   return arr;
-}
-
-// Lazy fetch of floor prices when the user picks a floor-* sort. Hits
-// /api/floor/<csv-of-contracts> which batches Alchemy getFloorPrice
-// behind one Worker request + KV cache. Re-sorts and re-renders the
-// tree when results land. Keeps editor.floorLoading=true so the
-// dropdown can show a spinner.
-async function loadFloorPrices() {
-  if (editor.floorByContract) return;       // already cached this session
-  if (editor.floorLoading) return;
-  editor.floorLoading = true;
-  refreshSidebar();
-  const contracts = [...editor.byCollection.keys()];
-  if (!contracts.length) { editor.floorLoading = false; return; }
-  try {
-    const u = new URL(`${API_URL}/api/floor`);
-    u.searchParams.set('contracts', contracts.join(','));
-    const r = await fetch(u);
-    if (!r.ok) throw new Error(`floor HTTP ${r.status}`);
-    const j = await r.json();
-    const map = new Map();
-    for (const [c, info] of Object.entries(j.floors || {})) {
-      // Worker returns { <contract>: { price: <number-or-null>, currency: 'ETH' } }.
-      // Null/undefined price means Alchemy returned no marketplace data.
-      if (info && typeof info.price === 'number') {
-        map.set(c.toLowerCase(), info);
-      } else {
-        map.set(c.toLowerCase(), { price: null, currency: null });
-      }
-    }
-    editor.floorByContract = map;
-  } catch (e) {
-    console.warn('floor fetch failed', e);
-    editor.floorByContract = new Map();    // empty map = "tried, gave up"
-  } finally {
-    editor.floorLoading = false;
-    editor.collectionsList = sortedCollectionList();
-    refreshSidebar();
-  }
 }
 
 async function loadEditorData() {
@@ -838,20 +778,13 @@ function renderSidebar() {
       A sphere can render at most <b>${SPHERE_TOKEN_CAP.toLocaleString()}</b>. In <em>Show all</em> mode the first
       ${SPHERE_TOKEN_CAP.toLocaleString()} are picked automatically — switch to <em>Pick subset</em> to choose which ones.
     </div>` : '';
-  // Sort options. Floor-* options pop up in the dropdown but the floor
-  // data is fetched lazily on first selection — Alchemy floor calls
-  // cost a request each so we don't burn quota until the user asks.
   const opts = [
     { v: 'count-desc', t: 'Most tokens first'  },
     { v: 'count-asc',  t: 'Fewest tokens first'},
-    { v: 'floor-desc', t: 'Highest floor first'},
-    { v: 'floor-asc',  t: 'Lowest floor first' },
   ];
   const sortOpts = opts.map(o =>
     `<option value="${o.v}" ${editor.sortMode === o.v ? 'selected' : ''}>${o.t}</option>`
   ).join('');
-  const floorPending = (editor.sortMode === 'floor-desc' || editor.sortMode === 'floor-asc')
-                    && editor.floorLoading;
   return `
     ${capBanner}
     <div class="mode-toggle" id="modeToggle">
@@ -861,7 +794,6 @@ function renderSidebar() {
     <div class="sort-row">
       <label for="sortSel">sort</label>
       <select id="sortSel">${sortOpts}</select>
-      ${floorPending ? '<span class="pending">loading floors…</span>' : ''}
     </div>
     <input type="text" class="search-input" id="searchInput" placeholder="Search collections / token name…" value="${esc(editor.searchQuery)}">
     <div class="tree-status" id="treeStatus">${treeStatusText()}</div>
@@ -951,18 +883,8 @@ function wireSidebar() {
   });
   $('#sortSel')?.addEventListener('change', (e) => {
     editor.sortMode = e.target.value;
-    // Floor sorts need data — fetch on demand. loadFloorPrices()
-    // resolves async; sortedCollectionList() handles the missing-floor
-    // case gracefully so the immediate re-render isn't broken.
-    const needsFloor = editor.sortMode === 'floor-desc' || editor.sortMode === 'floor-asc';
-    if (needsFloor && !editor.floorByContract) {
-      loadFloorPrices();   // updates state + refreshSidebar internally
-    }
     editor.collectionsList = sortedCollectionList();
     refreshTreeOnly();
-    // Re-render the sidebar header so "loading floors…" badge shows up
-    // immediately when needed (refreshTreeOnly only touches the tree DOM).
-    if (needsFloor && editor.floorLoading) refreshSidebar();
   });
   $('#searchInput')?.addEventListener('input', (e) => {
     editor.searchQuery = e.target.value;
