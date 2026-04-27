@@ -3,18 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>dustopia — living wallet portrait</title>
+<title>dustopia · living wallet portrait</title>
 <meta name="description" content="Each Dustopia NFT renders the holder's Ethereum wallet as a 3D sphere of swirling thumbnails. The artwork updates with the collection.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://dustopia.xyz/">
-<meta property="og:title" content="dustopia — living wallet portrait">
+<meta property="og:title" content="dustopia · living wallet portrait">
 <meta property="og:description" content="Each Dustopia NFT renders the holder's Ethereum wallet as a 3D sphere of swirling thumbnails. The artwork updates with the collection.">
 <meta property="og:image" content="https://api.dustopia.xyz/api/preview/1">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="dustopia — living wallet portrait">
+<meta name="twitter:title" content="dustopia · living wallet portrait">
 <meta name="twitter:description" content="Each Dustopia NFT renders the holder's Ethereum wallet as a 3D sphere of swirling thumbnails.">
 <meta name="twitter:image" content="https://api.dustopia.xyz/api/preview/1">
 
@@ -129,15 +129,7 @@
   /* ── Hero ──────────────────────────────────────────────────── */
   .hero {
     position:relative;
-    min-height:calc(100vh - 54px);
-    display:flex; align-items:center;
     overflow:hidden;
-    border-bottom:1px solid rgba(255,255,255,.06);
-  }
-  body.light .hero { border-bottom-color:rgba(0,0,0,.08); }
-
-  /* ── Hero ──────────────────────────────────────────────────── */
-  .hero {
     border-bottom:1px solid rgba(255,255,255,.06);
   }
   body.light .hero { border-bottom-color:rgba(0,0,0,.08); }
@@ -227,7 +219,7 @@
   }
 
   /* CTAs */
-  .cta-row { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:24px; }
+  .cta-row { display:flex; flex-wrap:wrap; gap:10px; }
   .btn {
     display:inline-flex; align-items:center; gap:8px;
     padding:11px 18px; border-radius:8px;
@@ -251,13 +243,6 @@
   body.light .btn-ghost { border-color:rgba(0,0,0,.18); }
   body.light .btn-ghost:hover { border-color:#18181b; }
   .btn .arrow { font-size:14px; line-height:1; }
-
-  /* Owner / source label under the CTAs */
-  .hero-source {
-    color:#7a7a85;
-  }
-  body.light .hero-source { color:#71717a; }
-  .hero-source a { border-bottom:1px solid currentColor; }
 
   /* ── How it works ──────────────────────────────────────────── */
   .steps {
@@ -400,12 +385,11 @@
       <a class="hero-image" href="/embed/0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf"
          title="Open the live sphere">
         <img src="https://api.dustopia.xyz/api/preview/1"
-             alt="Dustopia sphere preview — wallet rendered as swirling NFT particles"
+             alt="Dustopia sphere preview, wallet rendered as swirling NFT particles"
              loading="eager" decoding="async"
              width="1200" height="1200">
       </a>
       <div class="hero-content">
-        <span class="label">Open Edition · Ethereum</span>
         <h1>dustopia</h1>
         <p class="tagline">your wallet, in motion.</p>
         <p class="hero-desc">
@@ -422,9 +406,6 @@
             Configure your token <span class="arrow">→</span>
           </a>
         </div>
-        <div class="hero-source small mono">
-          preview · token <a href="/embed/0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf">#1</a>
-        </div>
       </div>
     </div>
   </div>
@@ -436,20 +417,20 @@
     <h2>Five moving parts. Two of them are on-chain.</h2>
     <p style="margin-bottom:32px;">
       The contract holds your ownership. Everything visual is rendered live in the
-      browser from your current wallet — there's no static image baked in at mint time.
+      browser from your current wallet. There's no static image baked in at mint time.
     </p>
     <div class="steps">
       <article class="step">
         <span class="num">01 / mint</span>
         <h3>Claim a token on OpenSea Drops</h3>
         <p>One ERC-721 per claim, capped supply. The contract is OpenSea's audited
-        Drops contract — we don't deploy custom mint logic.</p>
+        Drops contract. We don't deploy custom mint logic.</p>
       </article>
       <article class="step">
         <span class="num">02 / metadata</span>
         <h3>Token URI points at your wallet</h3>
         <p>The metadata's <span class="mono">animation_url</span> resolves to a live
-        view of the current owner's address — not a frozen render. Marketplace iframes
+        view of the current owner's address, not a frozen render. Marketplace iframes
         load the same view.</p>
       </article>
       <article class="step">
@@ -462,9 +443,9 @@
       <article class="step">
         <span class="num">04 / configure</span>
         <h3>Pick which NFTs go in</h3>
-        <p>Holders can curate the sphere — include all, or pick collections and
-        individual tokens. Owner-gated, signed locally with EIP-191. Saved to R2,
-        served to every viewer.</p>
+        <p>Holders can curate the sphere: include all, or pick specific
+        collections and individual tokens. Owner-gated, signed locally with
+        EIP-191. Saved to R2, served to every viewer.</p>
       </article>
       <article class="step">
         <span class="num">05 / transfer</span>
@@ -496,8 +477,8 @@
       <div class="stack-cell">
         <span class="label">cache</span>
         <strong>R2 + Edge</strong>
-        <p>Atlas binaries stored as WebP (q=0.9) — ~10× smaller than raw RGB.
-        Edge cache amortises R2 ops across visitors.</p>
+        <p>Atlas binaries stored as WebP (q=0.9), about 10× smaller than raw
+        RGB. Edge cache amortises R2 ops across visitors.</p>
       </div>
       <div class="stack-cell">
         <span class="label">auth</span>
@@ -528,8 +509,8 @@
     <div class="faq-list">
       <details class="faq">
         <summary>Does signing in the configurator cost anything?</summary>
-        <p>No. <span class="mono">personal_sign</span> is an off-chain signature —
-        no gas, no transaction. It only proves you own the address; the Worker
+        <p>No. <span class="mono">personal_sign</span> is an off-chain signature.
+        No gas, no transaction. It only proves you own the address; the Worker
         verifies the signature matches the on-chain owner before saving.</p>
       </details>
       <details class="faq">
@@ -541,15 +522,16 @@
       <details class="faq">
         <summary>What happens to my configuration if I sell the NFT?</summary>
         <p>The Alchemy Transfer webhook detects the sale and wipes your saved
-        selection within seconds. The new holder gets a clean default — their
+        selection within seconds. The new holder gets a clean default: their
         full wallet, no inherited subset.</p>
       </details>
       <details class="faq">
-        <summary>Why is the OpenSea grid preview a static image?</summary>
-        <p>Marketplace grid tiles can't run our iframe — they fetch a single
-        image. We render and cache a high-res snapshot of the sphere when any
-        visitor opens the embed view. A future update will swap that for a
-        looping animated WebP via Cloudflare Browser Rendering.</p>
+        <summary>How does the OpenSea grid preview work?</summary>
+        <p>Marketplace grid tiles can't run our iframe; they fetch a single
+        image. So when any visitor opens the embed view, the renderer captures
+        a short animated WebP loop of the live sphere and uploads it to R2.
+        Subsequent fetches return that loop until the holder changes their
+        selection or transfers the token.</p>
       </details>
     </div>
   </div>
@@ -560,9 +542,7 @@
     <span class="copy">© 2026 dustopia · OpenSea Drops contract <a href="https://etherscan.io/address/0x8196e52111255d71732c2187f0f8420704417ce6" target="_blank" rel="noopener" style="border-bottom:1px solid currentColor">0x8196…7cE6</a></span>
     <nav class="links">
       <a href="https://opensea.io/collection/dustopia" target="_blank" rel="noopener">opensea</a>
-      <a href="https://github.com/timsouw/dustopia" target="_blank" rel="noopener">github</a>
       <a href="/configure">configure</a>
-      <a href="https://api.dustopia.xyz/api/health" target="_blank" rel="noopener">api status</a>
     </nav>
   </div>
 </footer>
