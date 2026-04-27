@@ -16,6 +16,7 @@
 
 /embed/*     /embed/      200
 /configure/* /configure/  200
+/play        /play/       200
 
 # Fallback for unknown URLs. Without this Pages auto-injects something
 # similar but inserts it BEFORE the rules above, which is what broke

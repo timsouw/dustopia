@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>try dustopia · paste any wallet</title>
+<meta name="description" content="See any Ethereum address as a 3D sphere of swirling NFTs. Paste a wallet or ENS name and explore.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dustopia.xyz/play">
+<meta property="og:title" content="try dustopia · paste any wallet">
+<meta property="og:description" content="See any Ethereum address as a 3D sphere of swirling NFTs.">
+<meta property="og:image" content="https://api.dustopia.xyz/api/preview/1">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="try dustopia · paste any wallet">
+<meta name="twitter:description" content="See any Ethereum address as a 3D sphere of swirling NFTs.">
+<meta name="twitter:image" content="https://api.dustopia.xyz/api/preview/1">
+
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%;
+    background:#14141a; color:#e7e7ea;
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    font-feature-settings: "ss01", "ss02";
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+  }
+  body.light { background:#f4f4f5; color:#18181b; }
+  body { min-height:100vh; display:flex; flex-direction:column; }
+
+  a { color:inherit; text-decoration:none; }
+  ::selection { background:#7262d4; color:#fff; }
+  body.light ::selection { background:#18181b; color:#fafafa; }
+
+  .mono {
+    font-family:"SF Mono","Menlo","Roboto Mono",ui-monospace,monospace;
+    font-size:.86em; letter-spacing:.02em;
+  }
+  .label {
+    display:inline-block;
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:10px; letter-spacing:.18em; text-transform:uppercase;
+    color:#7a7a85;
+  }
+  body.light .label { color:#71717a; }
+
+  .wrap { width:100%; max-width:680px; margin:0 auto; padding:0 24px; }
+
+  /* Header — same shape as the landing */
+  header {
+    position:sticky; top:0; z-index:50;
+    background:rgba(20,20,26,.72);
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  body.light header {
+    background:rgba(244,244,245,.78);
+    border-bottom-color:rgba(0,0,0,.06);
+  }
+  header .bar {
+    display:flex; align-items:center; justify-content:space-between;
+    height:54px; max-width:1180px; margin:0 auto; padding:0 24px;
+  }
+  .brand {
+    display:flex; align-items:center; gap:10px;
+    font-size:14px; font-weight:600; letter-spacing:-0.01em;
+  }
+  .brand-mark {
+    width:18px; height:18px; border-radius:50%;
+    background:radial-gradient(38% 32% at 38% 32%,
+      #ffffff 0%, #d8d2ff 30%, #7262d4 60%, #120a2a 100%);
+    flex-shrink:0;
+  }
+  .nav-links { display:flex; align-items:center; gap:6px; }
+  .nav-link {
+    padding:6px 12px; border-radius:6px;
+    font-size:12px; letter-spacing:.02em; color:#9a9aa5;
+    transition:color 120ms, background 120ms;
+  }
+  .nav-link:hover { color:#e7e7ea; background:rgba(255,255,255,.05); }
+  body.light .nav-link { color:#71717a; }
+  body.light .nav-link:hover { color:#18181b; background:rgba(0,0,0,.04); }
+
+  .icon-btn {
+    background:transparent; border:1px solid rgba(255,255,255,.14);
+    color:inherit; cursor:pointer;
+    width:30px; height:30px; border-radius:7px;
+    display:inline-flex; align-items:center; justify-content:center;
+    transition:border-color 120ms;
+    margin-left:6px;
+  }
+  .icon-btn:hover { border-color:rgba(255,255,255,.4); }
+  body.light .icon-btn { border-color:rgba(0,0,0,.14); }
+  body.light .icon-btn:hover { border-color:rgba(0,0,0,.4); }
+  .icon-btn svg { width:14px; height:14px; }
+
+  /* Page content — vertically centered card */
+  main {
+    flex:1;
+    display:flex; align-items:center; justify-content:center;
+    padding:48px 0;
+  }
+  .card {
+    width:100%;
+  }
+  .card h1 {
+    font-size:42px; font-weight:600; letter-spacing:-0.025em;
+    line-height:1.05; margin-bottom:14px;
+  }
+  .card .lead {
+    font-size:16px; line-height:1.55; color:#9a9aa5;
+    margin-bottom:32px; max-width:48ch;
+  }
+  body.light .card .lead { color:#52525b; }
+  @media (max-width: 600px) { .card h1 { font-size:32px; } }
+
+  /* Input row */
+  .form-row {
+    display:flex; gap:8px;
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:10px;
+    padding:6px;
+    transition:border-color 160ms;
+  }
+  body.light .form-row {
+    background:#fff;
+    border-color:rgba(0,0,0,.10);
+  }
+  .form-row:focus-within { border-color:rgba(255,255,255,.34); }
+  body.light .form-row:focus-within { border-color:rgba(0,0,0,.34); }
+  .form-row input {
+    flex:1;
+    background:transparent; border:0; outline:none;
+    color:inherit; font:inherit;
+    padding:10px 12px;
+    font-size:15px; letter-spacing:-0.005em;
+  }
+  .form-row input::placeholder { color:#7a7a85; }
+  body.light .form-row input::placeholder { color:#a1a1aa; }
+  .form-row button {
+    padding:10px 18px; border-radius:8px;
+    background:#e7e7ea; color:#101217;
+    border:0; cursor:pointer;
+    font:inherit; font-size:13px; font-weight:600; letter-spacing:-0.005em;
+    transition:background 120ms, transform 120ms;
+  }
+  .form-row button:hover { background:#fff; transform:translateY(-1px); }
+  .form-row button:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+  body.light .form-row button { background:#18181b; color:#fafafa; }
+  body.light .form-row button:hover { background:#000; }
+
+  .form-error {
+    margin-top:10px;
+    font-size:12px; color:#fca5a5;
+    min-height:1em;
+  }
+  body.light .form-error { color:#b91c1c; }
+
+  /* Suggestions */
+  .preset-row {
+    margin-top:28px;
+  }
+  .preset-row .label { display:block; margin-bottom:10px; }
+  .preset-list {
+    display:flex; flex-wrap:wrap; gap:8px;
+  }
+  .preset {
+    padding:7px 12px; border-radius:7px;
+    background:transparent;
+    border:1px solid rgba(255,255,255,.12);
+    color:inherit;
+    font:inherit; font-size:12.5px; letter-spacing:-0.005em;
+    cursor:pointer;
+    transition:border-color 120ms, background 120ms, transform 120ms;
+  }
+  .preset:hover {
+    border-color:rgba(255,255,255,.34);
+    background:rgba(255,255,255,.04);
+    transform:translateY(-1px);
+  }
+  body.light .preset { border-color:rgba(0,0,0,.12); }
+  body.light .preset:hover {
+    border-color:rgba(0,0,0,.34);
+    background:rgba(0,0,0,.03);
+  }
+
+  .footnote {
+    margin-top:36px;
+    font-size:12px; line-height:1.55; color:#7a7a85;
+    max-width:54ch;
+  }
+  body.light .footnote { color:#71717a; }
+  .footnote a {
+    color:inherit;
+    border-bottom:1px solid currentColor;
+  }
+</style>
+</head>
+<body class="light">
+
+<header>
+  <div class="bar">
+    <a href="/" class="brand" aria-label="dustopia home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>dustopia</span>
+    </a>
+    <nav class="nav-links" aria-label="primary">
+      <a href="/#how" class="nav-link">how it works</a>
+      <a href="/#stack" class="nav-link">stack</a>
+      <a href="/configure" class="nav-link">configure</a>
+      <button id="themeBtn" class="icon-btn" type="button" aria-label="toggle theme" title="toggle theme">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap card">
+    <span class="label">try it</span>
+    <h1 style="margin-top:14px;">See any wallet as a sphere.</h1>
+    <p class="lead">
+      Paste an Ethereum address or ENS name. dustopia will fetch the wallet's
+      NFTs and render them as a 3D sphere you can drag, zoom and explore.
+      No connection, no signing, no minting required.
+    </p>
+
+    <form class="form-row" id="goForm" autocomplete="off">
+      <input
+        id="addrInput"
+        type="text"
+        spellcheck="false"
+        autocapitalize="off"
+        autocorrect="off"
+        placeholder="vitalik.eth or 0x…"
+        aria-label="wallet address or ENS name">
+      <button type="submit" id="goBtn">Render</button>
+    </form>
+    <div class="form-error" id="formError" aria-live="polite"></div>
+
+    <div class="preset-row">
+      <span class="label">try one of these</span>
+      <div class="preset-list" id="presetList"></div>
+    </div>
+
+    <p class="footnote">
+      Tip: wallets with hundreds of NFTs take a few seconds to load (the renderer
+      caches the result so a second visit is instant). Big collectors like
+      <span class="mono">vitalik.eth</span> are a good demo of how the sphere
+      handles density.
+    </p>
+  </div>
+</main>
+
+<script>
+  // safeStorage shim — same key as the landing/embed/configure pages so
+  // the theme choice carries across.
+  window.safeStorage = (function() {
+    let mem = {};
+    try {
+      const k = '__t';
+      localStorage.setItem(k, k); localStorage.removeItem(k);
+      return {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+      };
+    } catch {
+      return { get: (k) => mem[k] ?? null, set: (k, v) => { mem[k] = v; } };
+    }
+  })();
+
+  (function() {
+    const saved = safeStorage.get('franken-theme');
+    if (saved === 'dark') document.body.classList.remove('light');
+    else                  document.body.classList.add('light');
+  })();
+</script>
+
+<script>
+  const moon = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>';
+  const sun  = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 0v3M8 13v3M0 8h3M13 8h3M2.3 2.3l2.1 2.1M11.6 11.6l2.1 2.1M2.3 13.7l2.1-2.1M11.6 4.4l2.1-2.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
+  (function() {
+    const btn = document.getElementById('themeBtn');
+    function syncIcon() { btn.innerHTML = document.body.classList.contains('light') ? moon : sun; }
+    syncIcon();
+    btn.addEventListener('click', () => {
+      const isLight = document.body.classList.toggle('light');
+      safeStorage.set('franken-theme', isLight ? 'light' : 'dark');
+      syncIcon();
+    });
+  })();
+
+  // Validation matches the renderer's expectations: a 0x-prefixed 40-char
+  // hex string OR something that ends in .eth (we let the Worker resolve
+  // ENS so we don't have to pull in viem here). Anything else gets a
+  // user-visible error before navigation so we don't dump people into a
+  // /embed page that immediately throws.
+  function normalize(raw) {
+    return (raw || '').trim().toLowerCase();
+  }
+  function looksValid(s) {
+    if (!s) return false;
+    if (/^0x[0-9a-f]{40}$/.test(s)) return true;
+    if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.eth$/.test(s)) return true;
+    return false;
+  }
+
+  const presets = [
+    { label: 'vitalik.eth',    addr: 'vitalik.eth' },
+    { label: 'punk6529.eth',   addr: 'punk6529.eth' },
+    { label: 'pranksy.eth',    addr: 'pranksy.eth' },
+    { label: 'jackdorsey.eth', addr: 'jackdorsey.eth' },
+    { label: 'dustopia #1',    addr: '0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf' },
+  ];
+
+  const list = document.getElementById('presetList');
+  for (const p of presets) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'preset';
+    btn.textContent = p.label;
+    btn.addEventListener('click', () => go(p.addr));
+    list.appendChild(btn);
+  }
+
+  function go(raw) {
+    const v = normalize(raw);
+    const err = document.getElementById('formError');
+    if (!looksValid(v)) {
+      err.textContent = 'Enter a 0x address or an ENS name (ending in .eth).';
+      return;
+    }
+    err.textContent = '';
+    // Disable button + redirect. The /embed page does its own loading UI,
+    // so we don't need a spinner here — just hand off.
+    document.getElementById('goBtn').disabled = true;
+    window.location.href = `/embed/${encodeURIComponent(v)}`;
+  }
+
+  document.getElementById('goForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    go(document.getElementById('addrInput').value);
+  });
+
+  // If someone lands here with `#vitalik.eth` already in the URL, kick
+  // straight into the embed. Saves a click for power users who just
+  // bookmark /play.
+  (function() {
+    const h = location.hash.replace(/^#/, '');
+    if (h && looksValid(normalize(h))) go(h);
+  })();
+</script>
+
+</body>
+</html>
