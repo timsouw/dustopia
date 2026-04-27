@@ -515,7 +515,7 @@ const editor = {
   config:         null,                  // saved selection (or default)
   byCollection:   new Map(),             // contract -> { name, tokens: [{tokenId, image, name}] }
   collectionsList:[],                    // ordered contracts (post-sort)
-  sortMode:       'count-desc',          // count-desc | count-asc | floor-desc | floor-asc | name-asc
+  sortMode:       'count-desc',          // count-desc | count-asc | floor-desc | floor-asc
   floorByContract:null,                  // null until 'floor-*' selected; then Map<contract, {price, currency}>
   floorLoading:   false,
   mode:           'all',
@@ -642,9 +642,7 @@ function sortedCollectionList() {
   const mode = editor.sortMode || 'count-desc';
   const cmpName = (a, b) => editor.byCollection.get(a).name.toLowerCase()
     .localeCompare(editor.byCollection.get(b).name.toLowerCase());
-  if (mode === 'name-asc') {
-    arr.sort(cmpName);
-  } else if (mode === 'count-asc' || mode === 'count-desc') {
+  if (mode === 'count-asc' || mode === 'count-desc') {
     const dir = mode === 'count-desc' ? -1 : 1;
     arr.sort((a, b) => {
       const da = editor.byCollection.get(a).tokens.length;
@@ -848,7 +846,6 @@ function renderSidebar() {
     { v: 'count-asc',  t: 'Fewest tokens first'},
     { v: 'floor-desc', t: 'Highest floor first'},
     { v: 'floor-asc',  t: 'Lowest floor first' },
-    { v: 'name-asc',   t: 'Name A-Z'           },
   ];
   const sortOpts = opts.map(o =>
     `<option value="${o.v}" ${editor.sortMode === o.v ? 'selected' : ''}>${o.t}</option>`
