@@ -34,7 +34,13 @@ function corsHeaders(request) {
   return headers;
 }
 
-const WALLET_TTL = 30 * 60;          // 30 minutes
+// Wallet listings (Alchemy getNFTsForOwner) cached for 6h. NFT holdings
+// change rarely on a 30-min scale, often enough on a 24h scale (mints,
+// trades). 6h is the sweet spot for protecting Alchemy's 25 req/s
+// free-tier from the burst of "10 first-time visitors clicking Render
+// at the same time" — each unique wallet gets fetched once per 6h,
+// repeat visits hit KV instantly.
+const WALLET_TTL = 6 * 60 * 60;      // 6 hours
 const ENS_TTL    = 24 * 60 * 60;     // 24 hours
 const ALCH_TIMEOUT_MS = 12000;
 
