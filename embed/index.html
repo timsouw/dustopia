@@ -211,6 +211,12 @@
     // shouldn't keep re-capturing what a real /embed visit will), but
     // atlas upload stays on so subsequent hero loads hit the R2 cache.
     if (params.get('landing') === '1') window.__dustopiaLanding = true;
+    // PFP-generator mode: forces pure-white background, clamps theme to
+    // light, and exposes a postMessage handler that captures the live
+    // stage at 2000×2000 PNG for use as a Twitter/Telegram avatar. Same
+    // upload-skipping discipline as landing/nocache so the playground
+    // doesn't pollute R2 with avatar drafts.
+    if (params.get('pfp') === '1') window.__dustopiaPfp = true;
     const selRaw = params.get('sel');
     if (selRaw) {
       try {
@@ -1085,6 +1091,48 @@ window.addEventListener('message', (e) => {
     const addr = window.__dustopiaWalletAddr;
     if (!addr) return;
     tryCaptureAndUploadPreview(addr, { force: true }).catch(() => {});
+    return;
+  }
+  // PFP capture: parent /pfp page asks for a 2000×2000 white-bg PNG of
+  // the current sphere. We render the live stage onto a square offscreen
+  // canvas (white fill behind in case the GL canvas isn't fully opaque)
+  // and post the resulting Blob back via structured clone. Parent turns
+  // it into a download link. Defaults to 2000 px but accepts an override
+  // via e.data.size for callers that want different dimensions.
+  if (e.data.type === 'dustopia:pfp-capture') {
+    const stage = document.getElementById('stage');
+    if (!stage) {
+      e.source?.postMessage({ type: 'dustopia:pfp-blob', error: 'no stage' }, e.origin);
+      return;
+    }
+    const size = (typeof e.data.size === 'number' && e.data.size > 0)
+      ? Math.min(4096, Math.floor(e.data.size))
+      : 2000;
+    const off = document.createElement('canvas');
+    off.width = off.height = size;
+    const ctx = off.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    try {
+      // Centre-crop the (likely non-square) live canvas into the square
+      // PFP canvas. Pick the shorter side of the source so we don't
+      // letterbox or warp the sphere.
+      const sw = stage.width, sh = stage.height;
+      const side = Math.min(sw, sh);
+      const sx = (sw - side) / 2;
+      const sy = (sh - side) / 2;
+      ctx.drawImage(stage, sx, sy, side, side, 0, 0, size, size);
+    } catch (err) {
+      e.source?.postMessage({ type: 'dustopia:pfp-blob', error: String(err && err.message || err) }, e.origin);
+      return;
+    }
+    off.toBlob((blob) => {
+      if (!blob) {
+        e.source?.postMessage({ type: 'dustopia:pfp-blob', error: 'toBlob null' }, e.origin);
+        return;
+      }
+      e.source?.postMessage({ type: 'dustopia:pfp-blob', blob, size }, e.origin);
+    }, 'image/png');
   }
 });
 
@@ -1239,7 +1287,7 @@ async function buildLiveData(input) {
   // upload would block first paint by ~5-30s for large wallets — not worth
   // it. Failures are logged and otherwise ignored. Skipped in preview mode
   // so editor drafts don't pollute the public cache.
-  if (!window.__dustopiaPreview && !window.__dustopiaNocache) uploadAtlas(addr, meta, atlasBlob, fp);
+  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaPfp) uploadAtlas(addr, meta, atlasBlob, fp);
   return { meta, atlasData, atlasW, atlasH, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false, selection, fp };
 }
 
@@ -1324,7 +1372,7 @@ async function main() {
   // if R2 already has a capture for this wallet (HEAD check inside) and
   // skipped entirely in editor preview mode so drafts don't overwrite
   // the canonical OpenSea grid image.
-  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaLanding) {
+  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaLanding && !window.__dustopiaPfp) {
     setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, PREVIEW_DELAY_MS);
   }
 
@@ -1904,8 +1952,14 @@ async function main() {
   // =============================================================
   const themeBtn   = document.getElementById('themeBtn');
   const DARK_CLEAR  = [0.078, 0.078, 0.086];   // ~#14141A — slightly lifted off pure black so dark NFTs don't disappear into the background
-  const LIGHT_CLEAR = [0.957, 0.957, 0.961];
-  let lightTheme = document.body.classList.contains('light');
+  // PFP mode hard-overrides the light clear to pure white so the captured
+  // PNG looks clean on Twitter/Telegram (their backgrounds aren't always
+  // light-grey). Fog colour also reads from LIGHT_CLEAR so depth-fade
+  // matches the background automatically.
+  const LIGHT_CLEAR = window.__dustopiaPfp ? [1, 1, 1] : [0.957, 0.957, 0.961];
+  // PFP mode pins the theme to light regardless of the visitor's saved
+  // preference — the avatar is meant to read the same way for everyone.
+  let lightTheme = window.__dustopiaPfp ? true : document.body.classList.contains('light');
   function applyTheme() {
     const c = lightTheme ? LIGHT_CLEAR : DARK_CLEAR;
     gl.clearColor(c[0], c[1], c[2], 1);

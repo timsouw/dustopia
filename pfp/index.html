@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pfp · dustopia</title>
+<meta name="description" content="Generate a 2000×2000 dustopia sphere from any Ethereum wallet. Drop in as your Twitter / Telegram / Discord profile picture.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
+
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%;
+    background:#14141a; color:#e7e7ea;
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+  }
+  body.light { background:#f4f4f5; color:#18181b; }
+  body { min-height:100vh; }
+  a { color:inherit; text-decoration:none; }
+  ::selection { background:#7262d4; color:#fff; }
+  body.light ::selection { background:#18181b; color:#fafafa; }
+
+  .mono { font-family:"SF Mono","Menlo",ui-monospace,monospace; font-size:.86em; letter-spacing:.02em; }
+  .label {
+    display:inline-block;
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:10px; letter-spacing:.18em; text-transform:uppercase;
+    color:#7a7a85;
+  }
+  body.light .label { color:#71717a; }
+
+  /* Header */
+  header {
+    position:sticky; top:0; z-index:50;
+    background:rgba(20,20,26,.72);
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  body.light header { background:rgba(244,244,245,.78); border-bottom-color:rgba(0,0,0,.06); }
+  header .bar {
+    display:flex; align-items:center; justify-content:space-between;
+    height:54px; max-width:1240px; margin:0 auto; padding:0 24px;
+  }
+  .brand { display:flex; align-items:center; gap:10px; font-size:14px; font-weight:600; letter-spacing:-0.01em; }
+  .brand-mark {
+    width:18px; height:18px; border-radius:50%;
+    background:radial-gradient(38% 32% at 38% 32%, #ffffff 0%, #d8d2ff 30%, #7262d4 60%, #120a2a 100%);
+  }
+  .nav-links { display:flex; align-items:center; gap:6px; }
+  .nav-link {
+    padding:6px 12px; border-radius:6px;
+    font-size:12px; letter-spacing:.02em; color:#9a9aa5;
+    transition:color 120ms, background 120ms;
+  }
+  .nav-link:hover { color:#e7e7ea; background:rgba(255,255,255,.05); }
+  body.light .nav-link { color:#71717a; }
+  body.light .nav-link:hover { color:#18181b; background:rgba(0,0,0,.04); }
+  .nav-link.current { color:#e7e7ea; background:rgba(255,255,255,.06); }
+  body.light .nav-link.current { color:#18181b; background:rgba(0,0,0,.05); }
+  .icon-btn {
+    background:transparent; border:1px solid rgba(255,255,255,.14);
+    color:inherit; cursor:pointer;
+    width:30px; height:30px; border-radius:7px;
+    display:inline-flex; align-items:center; justify-content:center;
+    margin-left:6px;
+  }
+  .icon-btn:hover { border-color:rgba(255,255,255,.4); }
+  body.light .icon-btn { border-color:rgba(0,0,0,.14); }
+  body.light .icon-btn:hover { border-color:rgba(0,0,0,.4); }
+  .icon-btn svg { width:14px; height:14px; }
+
+  .wrap { width:100%; max-width:920px; margin:0 auto; padding:36px 24px 64px; }
+
+  .pfp-head {
+    display:flex; flex-direction:column; gap:8px;
+    margin-bottom:28px;
+  }
+  .pfp-head h1 {
+    font-size:32px; font-weight:600; letter-spacing:-0.02em; line-height:1.1;
+  }
+  .pfp-head p {
+    font-size:14px; line-height:1.55; color:#9a9aa5; max-width:60ch;
+  }
+  body.light .pfp-head p { color:#52525b; }
+
+  /* Input row — same shape as /play */
+  .form-row {
+    display:flex; gap:8px;
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:10px;
+    padding:6px;
+    transition:border-color 160ms;
+    margin-bottom:10px;
+  }
+  body.light .form-row { background:#fff; border-color:rgba(0,0,0,.10); }
+  .form-row:focus-within { border-color:rgba(255,255,255,.34); }
+  body.light .form-row:focus-within { border-color:rgba(0,0,0,.34); }
+  .form-row input {
+    flex:1;
+    background:transparent; border:0; outline:none;
+    color:inherit; font:inherit;
+    padding:10px 12px;
+    font-size:15px; letter-spacing:-0.005em;
+  }
+  .form-row input::placeholder { color:#7a7a85; }
+  body.light .form-row input::placeholder { color:#a1a1aa; }
+  .form-row button {
+    padding:10px 18px; border-radius:8px;
+    background:#e7e7ea; color:#101217;
+    border:0; cursor:pointer;
+    font:inherit; font-size:13px; font-weight:600; letter-spacing:-0.005em;
+    transition:background 120ms, transform 120ms;
+  }
+  .form-row button:hover { background:#fff; transform:translateY(-1px); }
+  .form-row button:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+  body.light .form-row button { background:#18181b; color:#fafafa; }
+  body.light .form-row button:hover { background:#000; }
+
+  .form-error {
+    margin-bottom:18px;
+    font-size:12px; color:#fca5a5;
+    min-height:1em;
+  }
+  body.light .form-error { color:#b91c1c; }
+
+  /* Stage panel = round preview + status + download button */
+  .pfp-stage {
+    margin-top:24px;
+    display:grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap:24px;
+    align-items:start;
+  }
+  @media (max-width: 760px) {
+    .pfp-stage { grid-template-columns: 1fr; }
+  }
+
+  .pfp-frame {
+    position:relative;
+    aspect-ratio:1 / 1;
+    width:100%;
+    border-radius:50%;
+    overflow:hidden;
+    background:#fff;
+    border:1px solid rgba(0,0,0,.06);
+    /* Subtle drop-shadow so the round frame reads as a PFP preview */
+    box-shadow: 0 24px 48px -16px rgba(0,0,0,.18);
+  }
+  .pfp-frame iframe {
+    width:100%; height:100%; border:0; display:block;
+    background:#fff;
+  }
+
+  .pfp-side {
+    display:flex; flex-direction:column; gap:14px;
+  }
+  .pfp-side h2 {
+    font-size:16px; font-weight:600; letter-spacing:-0.005em;
+  }
+  .pfp-side p {
+    font-size:13px; line-height:1.55; color:#9a9aa5;
+  }
+  body.light .pfp-side p { color:#52525b; }
+
+  .status {
+    font-size:12px; color:#9a9aa5; letter-spacing:-0.005em;
+    min-height:1em;
+  }
+  body.light .status { color:#71717a; }
+  .status.ready { color:#16a34a; }
+  body.light .status.ready { color:#15803d; }
+  .status.err   { color:#fca5a5; }
+  body.light .status.err   { color:#b91c1c; }
+
+  .dl-btn {
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    padding:12px 20px; border-radius:8px;
+    background:#e7e7ea; color:#101217;
+    border:0; cursor:pointer;
+    font:inherit; font-size:13px; font-weight:600; letter-spacing:-0.005em;
+    transition:background 120ms, transform 120ms;
+    width:100%;
+  }
+  .dl-btn:hover { background:#fff; transform:translateY(-1px); }
+  .dl-btn:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+  body.light .dl-btn { background:#18181b; color:#fafafa; }
+  body.light .dl-btn:hover { background:#000; }
+  .dl-btn .arrow { font-size:14px; line-height:1; }
+
+  /* Tiny apple-style spinner shown while we capture */
+  .spinner {
+    width:14px; height:14px; position:relative;
+  }
+  .spinner span {
+    position:absolute; left:50%; top:50%; width:1.6px; height:4px;
+    margin:-2px 0 0 -0.8px;
+    background:currentColor; border-radius:1px;
+    opacity:0.15;
+    animation:spin-fade 1.2s linear infinite;
+  }
+  @keyframes spin-fade { 0%{opacity:1} 100%{opacity:.1} }
+  .spinner span:nth-child(1)  { transform:rotate(  0deg) translateY(-5px); animation-delay:-1.10s; }
+  .spinner span:nth-child(2)  { transform:rotate( 30deg) translateY(-5px); animation-delay:-1.00s; }
+  .spinner span:nth-child(3)  { transform:rotate( 60deg) translateY(-5px); animation-delay:-0.90s; }
+  .spinner span:nth-child(4)  { transform:rotate( 90deg) translateY(-5px); animation-delay:-0.80s; }
+  .spinner span:nth-child(5)  { transform:rotate(120deg) translateY(-5px); animation-delay:-0.70s; }
+  .spinner span:nth-child(6)  { transform:rotate(150deg) translateY(-5px); animation-delay:-0.60s; }
+  .spinner span:nth-child(7)  { transform:rotate(180deg) translateY(-5px); animation-delay:-0.50s; }
+  .spinner span:nth-child(8)  { transform:rotate(210deg) translateY(-5px); animation-delay:-0.40s; }
+  .spinner span:nth-child(9)  { transform:rotate(240deg) translateY(-5px); animation-delay:-0.30s; }
+  .spinner span:nth-child(10) { transform:rotate(270deg) translateY(-5px); animation-delay:-0.20s; }
+  .spinner span:nth-child(11) { transform:rotate(300deg) translateY(-5px); animation-delay:-0.10s; }
+  .spinner span:nth-child(12) { transform:rotate(330deg) translateY(-5px); animation-delay: 0.00s; }
+
+  .footnote {
+    margin-top:36px;
+    font-size:12px; line-height:1.55; color:#7a7a85;
+    max-width:54ch;
+  }
+  body.light .footnote { color:#71717a; }
+</style>
+</head>
+<body class="light">
+
+<header>
+  <div class="bar">
+    <a href="/" class="brand" aria-label="dustopia home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>dustopia</span>
+    </a>
+    <nav class="nav-links" aria-label="primary">
+      <a href="/#how" class="nav-link">how it works</a>
+      <a href="/gallery" class="nav-link">gallery</a>
+      <a href="/leaderboard" class="nav-link">leaderboard</a>
+      <a href="/play" class="nav-link">play</a>
+      <a href="/configure" class="nav-link">configure</a>
+      <button id="themeBtn" class="icon-btn" type="button" aria-label="toggle theme" title="toggle theme">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="pfp-head">
+    <span class="label">profile picture</span>
+    <h1>Your wallet, as a PFP.</h1>
+    <p>Drop in any Ethereum address or ENS name and download a 2000×2000 PNG of the sphere on a clean white background. Use it as your Twitter, Telegram or Discord avatar.</p>
+  </section>
+
+  <form class="form-row" id="goForm" autocomplete="off">
+    <input
+      id="addrInput"
+      type="text"
+      spellcheck="false"
+      autocapitalize="off"
+      autocorrect="off"
+      placeholder="vitalik.eth or 0x…"
+      aria-label="wallet address or ENS name">
+    <button type="submit" id="goBtn">Render</button>
+  </form>
+  <div class="form-error" id="formError" aria-live="polite"></div>
+
+  <section id="stage" class="pfp-stage" hidden>
+    <div class="pfp-frame">
+      <iframe id="pfpFrame" title="dustopia sphere preview"></iframe>
+    </div>
+    <aside class="pfp-side">
+      <h2>Preview</h2>
+      <p>Wait for the sphere to settle (≈10 seconds). When it stops jittering, click Download.</p>
+      <div class="status" id="pfpStatus"><span class="spinner" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span> building sphere…</div>
+      <button class="dl-btn" id="dlBtn" type="button" disabled>Download 2000×2000 PNG <span class="arrow">↓</span></button>
+      <p class="mono" id="addrEcho" style="font-size:11px"></p>
+    </aside>
+  </section>
+
+  <p class="footnote">
+    The PFP is rendered locally in your browser from on-chain wallet data. Nothing is uploaded — when you press Download, the file is generated and saved straight to your machine.
+  </p>
+</main>
+
+<script>
+  window.safeStorage = (function() {
+    let mem = {};
+    try {
+      const k = '__t';
+      localStorage.setItem(k, k); localStorage.removeItem(k);
+      return {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+      };
+    } catch {
+      return { get: (k) => mem[k] ?? null, set: (k, v) => { mem[k] = v; } };
+    }
+  })();
+  (function() {
+    const saved = safeStorage.get('franken-theme');
+    if (saved === 'dark') document.body.classList.remove('light');
+    else                  document.body.classList.add('light');
+  })();
+</script>
+
+<script>
+  const moon = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>';
+  const sun  = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 0v3M8 13v3M0 8h3M13 8h3M2.3 2.3l2.1 2.1M11.6 11.6l2.1 2.1M2.3 13.7l2.1-2.1M11.6 4.4l2.1-2.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  (function() {
+    const btn = document.getElementById('themeBtn');
+    function syncIcon() { btn.innerHTML = document.body.classList.contains('light') ? moon : sun; }
+    syncIcon();
+    btn.addEventListener('click', () => {
+      const isLight = document.body.classList.toggle('light');
+      safeStorage.set('franken-theme', isLight ? 'light' : 'dark');
+      syncIcon();
+    });
+  })();
+
+  function normalize(raw) { return (raw || '').trim().toLowerCase(); }
+  function looksValid(s) {
+    if (!s) return false;
+    if (/^0x[0-9a-f]{40}$/.test(s)) return true;
+    if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.eth$/.test(s)) return true;
+    return false;
+  }
+
+  const PFP_SIZE = 2000;     // final PNG dimensions (also forwarded to iframe via postMessage)
+  let currentAddr = null;
+  let frameReady  = false;
+
+  function setStatus(text, kind) {
+    const el = document.getElementById('pfpStatus');
+    el.classList.remove('ready', 'err');
+    if (kind) el.classList.add(kind);
+    if (text && text.startsWith('@spin ')) {
+      const label = text.slice(6);
+      el.innerHTML = '<span class="spinner" aria-hidden="true">' +
+        '<span></span>'.repeat(12) + '</span> ' + label;
+    } else {
+      el.textContent = text;
+    }
+  }
+
+  function setError(msg) {
+    document.getElementById('formError').textContent = msg || '';
+  }
+
+  // Hand off into the player view: show the iframe panel + reset status,
+  // load /embed/<addr>?pfp=1&landing=1 (landing trims constants for memory),
+  // and listen for `dustopia:built` to enable the download button.
+  function loadAddr(addr) {
+    currentAddr = addr;
+    frameReady  = false;
+    document.getElementById('stage').hidden = false;
+    document.getElementById('addrEcho').textContent = addr;
+    document.getElementById('dlBtn').disabled = true;
+    setStatus('@spin building sphere…');
+
+    // landing=1 keeps the renderer light on memory; pfp=1 forces white
+    // background + light theme + uploads-off and registers the capture
+    // postMessage handler in the iframe.
+    const fr = document.getElementById('pfpFrame');
+    fr.src = `/embed/${encodeURIComponent(addr)}?pfp=1&landing=1&t=${Date.now()}`;
+
+    // Update URL hash for shareability — `/pfp#vitalik.eth` deep-links.
+    if (location.hash !== '#' + addr) {
+      history.replaceState(null, '', '#' + addr);
+    }
+  }
+
+  // Trigger the capture handshake: post `dustopia:pfp-capture` to the
+  // iframe; iframe paints + posts `dustopia:pfp-blob` back; we save it.
+  // Times out at 30s in case the iframe never finishes.
+  function downloadPng() {
+    const fr = document.getElementById('pfpFrame');
+    if (!fr || !fr.contentWindow || !currentAddr) return;
+    setStatus('@spin capturing 2000×2000…');
+    document.getElementById('dlBtn').disabled = true;
+
+    let timer;
+    const onMessage = (e) => {
+      if (e.origin !== location.origin) return;
+      if (!e.data || e.data.type !== 'dustopia:pfp-blob') return;
+      window.removeEventListener('message', onMessage);
+      clearTimeout(timer);
+      if (e.data.error || !e.data.blob) {
+        setStatus('Capture failed: ' + (e.data.error || 'no blob'), 'err');
+        document.getElementById('dlBtn').disabled = false;
+        return;
+      }
+      // Convert blob → object URL → trigger download.
+      const url = URL.createObjectURL(e.data.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `dustopia-${currentAddr}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Free the blob URL after the download dialog has had a moment to
+      // open. Browsers don't need it once the download has started.
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setStatus('Saved.', 'ready');
+      document.getElementById('dlBtn').disabled = false;
+    };
+    window.addEventListener('message', onMessage);
+    timer = setTimeout(() => {
+      window.removeEventListener('message', onMessage);
+      setStatus('Capture timed out — try again once the sphere stops moving.', 'err');
+      document.getElementById('dlBtn').disabled = false;
+    }, 30000);
+
+    fr.contentWindow.postMessage(
+      { type: 'dustopia:pfp-capture', size: PFP_SIZE },
+      location.origin
+    );
+  }
+
+  // The embed posts `dustopia:built` once the sphere has painted. That's
+  // our cue to enable Download — earlier and the canvas is empty/dark.
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin) return;
+    if (!e.data || e.data.type !== 'dustopia:built') return;
+    frameReady = true;
+    document.getElementById('dlBtn').disabled = false;
+    setStatus('Ready.', 'ready');
+  });
+
+  // Form submit
+  document.getElementById('goForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = normalize(document.getElementById('addrInput').value);
+    if (!looksValid(v)) {
+      setError('Enter a 0x address or an ENS name (ending in .eth).');
+      return;
+    }
+    setError('');
+    loadAddr(v);
+  });
+
+  document.getElementById('dlBtn').addEventListener('click', downloadPng);
+
+  // /pfp/<addr> path or /pfp#<addr> deep link both auto-load.
+  function readAddrFromUrl() {
+    const m = location.pathname.match(/^\/pfp\/([^/?#]+)\/?$/);
+    if (m) {
+      try { return decodeURIComponent(m[1]).toLowerCase(); } catch { return ''; }
+    }
+    return decodeURIComponent(location.hash.replace(/^#/, '')).toLowerCase();
+  }
+
+  (function() {
+    const v = normalize(readAddrFromUrl());
+    if (v && looksValid(v)) {
+      document.getElementById('addrInput').value = v;
+      loadAddr(v);
+    }
+  })();
+</script>
+
+</body>
+</html>
