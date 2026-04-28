@@ -10,4 +10,6 @@
 /gallery       /gallery/      200
 /leaderboard   /leaderboard/  200
 /play          /play/         200
+/pfp/*         /pfp/          200
+/pfp           /pfp/          200
 /*             /index.html    200
