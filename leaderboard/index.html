@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>leaderboard · dustopia</title>
+<meta name="description" content="Top Dustopia holders ranked by sphere richness — collection diversity, NFT count, multi-token holdings.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dustopia.xyz/leaderboard">
+<meta property="og:title" content="dustopia · leaderboard">
+<meta property="og:description" content="Top Dustopia holders ranked by sphere richness.">
+<meta property="og:image" content="https://api.dustopia.xyz/api/preview/1">
+
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%;
+    background:#14141a; color:#e7e7ea;
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+  }
+  body.light { background:#f4f4f5; color:#18181b; }
+  body { min-height:100vh; }
+  a { color:inherit; text-decoration:none; }
+  ::selection { background:#7262d4; color:#fff; }
+  body.light ::selection { background:#18181b; color:#fafafa; }
+
+  .mono { font-family:"SF Mono","Menlo",ui-monospace,monospace; font-size:.86em; letter-spacing:.02em; }
+  .label {
+    display:inline-block;
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:10px; letter-spacing:.18em; text-transform:uppercase;
+    color:#7a7a85;
+  }
+  body.light .label { color:#71717a; }
+
+  /* Header */
+  header {
+    position:sticky; top:0; z-index:50;
+    background:rgba(20,20,26,.72);
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  body.light header { background:rgba(244,244,245,.78); border-bottom-color:rgba(0,0,0,.06); }
+  header .bar {
+    display:flex; align-items:center; justify-content:space-between;
+    height:54px; max-width:1180px; margin:0 auto; padding:0 24px;
+  }
+  .brand { display:flex; align-items:center; gap:10px; font-size:14px; font-weight:600; letter-spacing:-0.01em; }
+  .brand-mark {
+    width:18px; height:18px; border-radius:50%;
+    background:radial-gradient(38% 32% at 38% 32%, #ffffff 0%, #d8d2ff 30%, #7262d4 60%, #120a2a 100%);
+  }
+  .nav-links { display:flex; align-items:center; gap:6px; }
+  .nav-link {
+    padding:6px 12px; border-radius:6px;
+    font-size:12px; letter-spacing:.02em; color:#9a9aa5;
+    transition:color 120ms, background 120ms;
+  }
+  .nav-link:hover { color:#e7e7ea; background:rgba(255,255,255,.05); }
+  body.light .nav-link { color:#71717a; }
+  body.light .nav-link:hover { color:#18181b; background:rgba(0,0,0,.04); }
+  .nav-link.current { color:#e7e7ea; background:rgba(255,255,255,.06); }
+  body.light .nav-link.current { color:#18181b; background:rgba(0,0,0,.05); }
+  .icon-btn {
+    background:transparent; border:1px solid rgba(255,255,255,.14);
+    color:inherit; cursor:pointer;
+    width:30px; height:30px; border-radius:7px;
+    display:inline-flex; align-items:center; justify-content:center;
+    margin-left:6px;
+  }
+  .icon-btn:hover { border-color:rgba(255,255,255,.4); }
+  body.light .icon-btn { border-color:rgba(0,0,0,.14); }
+  body.light .icon-btn:hover { border-color:rgba(0,0,0,.4); }
+  .icon-btn svg { width:14px; height:14px; }
+
+  /* Page body */
+  .wrap { width:100%; max-width:920px; margin:0 auto; padding:36px 24px 64px; }
+
+  .lb-head {
+    display:flex; flex-direction:column; gap:8px;
+    margin-bottom:28px;
+  }
+  .lb-head h1 {
+    font-size:32px; font-weight:600; letter-spacing:-0.02em; line-height:1.1;
+  }
+  .lb-head p {
+    font-size:14px; line-height:1.55; color:#9a9aa5; max-width:60ch;
+  }
+  body.light .lb-head p { color:#52525b; }
+
+  /* Sort toggle row */
+  .sort-row {
+    display:flex; gap:4px;
+    padding:3px; border-radius:8px;
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.08);
+    margin-bottom:24px;
+    width:fit-content;
+  }
+  body.light .sort-row { background:#fff; border-color:rgba(0,0,0,.08); }
+  .sort-row button {
+    padding:7px 12px; border-radius:6px;
+    background:transparent; border:0;
+    color:#9a9aa5; cursor:pointer;
+    font:inherit; font-size:12px; font-weight:500; letter-spacing:-0.005em;
+    transition:background 120ms, color 120ms;
+  }
+  .sort-row button.active { background:rgba(255,255,255,.08); color:#e7e7ea; }
+  body.light .sort-row button { color:#71717a; }
+  body.light .sort-row button.active { background:#18181b; color:#fafafa; }
+
+  /* Leaderboard table */
+  .lb-table {
+    border:1px solid rgba(255,255,255,.06);
+    border-radius:12px;
+    overflow:hidden;
+    background:rgba(255,255,255,.02);
+  }
+  body.light .lb-table { background:rgba(0,0,0,.02); border-color:rgba(0,0,0,.06); }
+  .lb-row {
+    display:grid;
+    grid-template-columns: 60px minmax(0, 1fr) 90px 90px 90px;
+    align-items:center;
+    gap:12px;
+    padding:12px 18px;
+    border-bottom:1px solid rgba(255,255,255,.05);
+    transition:background 120ms;
+  }
+  .lb-row:last-child { border-bottom:0; }
+  body.light .lb-row { border-bottom-color:rgba(0,0,0,.05); }
+  .lb-row:hover { background:rgba(255,255,255,.03); }
+  body.light .lb-row:hover { background:rgba(0,0,0,.025); }
+  .lb-row.head {
+    background:rgba(255,255,255,.04);
+    font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+    color:#7a7a85;
+    padding:10px 18px;
+  }
+  body.light .lb-row.head { background:rgba(0,0,0,.03); color:#71717a; }
+  .lb-row.head:hover { background:rgba(255,255,255,.04); }
+  body.light .lb-row.head:hover { background:rgba(0,0,0,.03); }
+
+  .lb-rank {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:13px; color:#9a9aa5;
+  }
+  .lb-rank.top { color:#e7e7ea; font-weight:600; }
+  body.light .lb-rank { color:#71717a; }
+  body.light .lb-rank.top { color:#18181b; }
+
+  .lb-holder {
+    display:flex; align-items:center; gap:10px;
+    overflow:hidden;
+  }
+  .lb-avatar {
+    width:32px; height:32px; flex-shrink:0;
+    border-radius:50%;
+    background:#14141a;
+    overflow:hidden;
+  }
+  body.light .lb-avatar { background:#e9e9ec; }
+  .lb-avatar img {
+    width:100%; height:100%; object-fit:cover; display:block;
+  }
+  .lb-addr {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:13px; letter-spacing:.02em;
+    color:inherit;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    transition:color 120ms;
+  }
+  .lb-row:hover .lb-addr { color:#e7e7ea; }
+  body.light .lb-row:hover .lb-addr { color:#18181b; }
+
+  .lb-stat {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:13px; text-align:right;
+    color:#e7e7ea;
+  }
+  body.light .lb-stat { color:#18181b; }
+  .lb-stat.dim { color:#7a7a85; }
+  body.light .lb-stat.dim { color:#a1a1aa; }
+
+  /* Make the entire row clickable */
+  .lb-link {
+    display:contents;
+    color:inherit;
+    cursor:pointer;
+  }
+
+  /* Mobile */
+  @media (max-width:640px) {
+    .lb-row {
+      grid-template-columns: 32px minmax(0, 1fr) 64px;
+      gap:10px;
+      padding:12px 14px;
+    }
+    .lb-row .col-tokens, .lb-row .col-dustopias { display:none; }
+    .lb-row.head .col-tokens, .lb-row.head .col-dustopias { display:none; }
+    .lb-rank { font-size:12px; }
+    .lb-addr { font-size:12.5px; }
+    .lb-stat { font-size:12.5px; }
+  }
+
+  .empty-state, .error-state {
+    padding:60px 24px;
+    text-align:center;
+    border:1px dashed rgba(255,255,255,.08);
+    border-radius:12px;
+    color:#9a9aa5;
+    font-size:14px; line-height:1.55;
+  }
+  body.light .empty-state, body.light .error-state {
+    border-color:rgba(0,0,0,.08); color:#52525b;
+  }
+  .empty-state .cta {
+    display:inline-block;
+    margin-top:14px;
+    padding:9px 16px; border-radius:8px;
+    background:#e7e7ea; color:#101217;
+    font-size:12.5px; font-weight:600;
+  }
+  body.light .empty-state .cta { background:#18181b; color:#fafafa; }
+
+  .skeleton-row {
+    height:56px;
+    border-bottom:1px solid rgba(255,255,255,.05);
+    background:linear-gradient(90deg,
+      rgba(255,255,255,.03) 0%,
+      rgba(255,255,255,.06) 50%,
+      rgba(255,255,255,.03) 100%);
+    background-size:200% 100%;
+    animation:skel 1.4s ease-in-out infinite;
+  }
+  body.light .skeleton-row {
+    background:linear-gradient(90deg,
+      rgba(0,0,0,.03) 0%, rgba(0,0,0,.06) 50%, rgba(0,0,0,.03) 100%);
+    background-size:200% 100%;
+  }
+  @keyframes skel {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+</style>
+</head>
+<body class="light">
+
+<header>
+  <div class="bar">
+    <a href="/" class="brand" aria-label="dustopia home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>dustopia</span>
+    </a>
+    <nav class="nav-links" aria-label="primary">
+      <a href="/#how" class="nav-link">how it works</a>
+      <a href="/gallery" class="nav-link">gallery</a>
+      <a href="/leaderboard" class="nav-link current">leaderboard</a>
+      <a href="/play" class="nav-link">play</a>
+      <a href="/configure" class="nav-link">configure</a>
+      <button id="themeBtn" class="icon-btn" type="button" aria-label="toggle theme" title="toggle theme">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="lb-head">
+    <span class="label">leaderboard</span>
+    <h1>Top spheres.</h1>
+    <p>Ranked by collection diversity, total NFTs, and how many Dustopias each holder owns. Click any row to see that holder's profile.</p>
+  </section>
+
+  <div class="sort-row" id="sortRow">
+    <button type="button" data-mode="collections" class="active">By collections</button>
+    <button type="button" data-mode="tokens">By NFTs</button>
+    <button type="button" data-mode="dustopias">By Dustopias owned</button>
+  </div>
+
+  <section id="board"></section>
+</main>
+
+<script>
+  window.safeStorage = (function() {
+    let mem = {};
+    try {
+      const k = '__t';
+      localStorage.setItem(k, k); localStorage.removeItem(k);
+      return {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+      };
+    } catch {
+      return { get: (k) => mem[k] ?? null, set: (k, v) => { mem[k] = v; } };
+    }
+  })();
+  (function() {
+    const saved = safeStorage.get('franken-theme');
+    if (saved === 'dark') document.body.classList.remove('light');
+    else                  document.body.classList.add('light');
+  })();
+</script>
+
+<script>
+  const moon = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>';
+  const sun  = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 0v3M8 13v3M0 8h3M13 8h3M2.3 2.3l2.1 2.1M11.6 11.6l2.1 2.1M2.3 13.7l2.1-2.1M11.6 4.4l2.1-2.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  (function() {
+    const btn = document.getElementById('themeBtn');
+    function syncIcon() { btn.innerHTML = document.body.classList.contains('light') ? moon : sun; }
+    syncIcon();
+    btn.addEventListener('click', () => {
+      const isLight = document.body.classList.toggle('light');
+      safeStorage.set('franken-theme', isLight ? 'light' : 'dark');
+      syncIcon();
+    });
+  })();
+
+  const API_URL = 'https://api.dustopia.xyz';
+
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+    ));
+  }
+  function shortAddr(a) { return `${a.slice(0,6)}…${a.slice(-4)}`; }
+
+  // Aggregate the flat /api/all-tokens list into a per-owner roll-up:
+  //   { owner, tokens, collections, dustopias, sampleTokenId }
+  // tokens/collections come from any one of the holder's saved-meta
+  // entries (atlas meta is per-owner, not per-Dustopia, so all of their
+  // tokens share the same numbers); dustopias is the count of Dustopias
+  // they own; sampleTokenId picks the lowest tokenId for the avatar
+  // preview URL.
+  function aggregate(tokens) {
+    const by = new Map();
+    for (const t of tokens) {
+      if (!t.owner) continue;
+      const cur = by.get(t.owner) || {
+        owner:         t.owner,
+        tokens:        null,
+        collections:   null,
+        dustopias:     0,
+        sampleTokenId: t.tokenId,
+      };
+      cur.dustopias += 1;
+      if (cur.tokens === null && t.tokens != null) cur.tokens = t.tokens;
+      if (cur.collections === null && t.collections != null) cur.collections = t.collections;
+      if (Number(t.tokenId) < Number(cur.sampleTokenId)) cur.sampleTokenId = t.tokenId;
+      by.set(t.owner, cur);
+    }
+    return [...by.values()];
+  }
+
+  // Sort comparators per mode. Tiebreak by tokens, then by lowest
+  // sampleTokenId so order is deterministic across reloads.
+  function sortHolders(holders, mode) {
+    const cmp = (a, b) => {
+      const av = (mode === 'collections') ? (a.collections ?? -1)
+              : (mode === 'tokens')      ? (a.tokens      ?? -1)
+              :                            a.dustopias;
+      const bv = (mode === 'collections') ? (b.collections ?? -1)
+              : (mode === 'tokens')      ? (b.tokens      ?? -1)
+              :                            b.dustopias;
+      if (bv !== av) return bv - av;
+      // Tiebreak: more dustopias > more tokens > lower sample id
+      if (b.dustopias !== a.dustopias) return b.dustopias - a.dustopias;
+      const at = a.tokens ?? 0, bt = b.tokens ?? 0;
+      if (bt !== at) return bt - at;
+      return Number(a.sampleTokenId) - Number(b.sampleTokenId);
+    };
+    return [...holders].sort(cmp);
+  }
+
+  function renderSkeletons() {
+    const rows = Array.from({ length: 8 }).map(() =>
+      `<div class="skeleton-row"></div>`
+    ).join('');
+    document.getElementById('board').innerHTML = `<div class="lb-table">${rows}</div>`;
+  }
+
+  function renderEmpty() {
+    document.getElementById('board').innerHTML = `
+      <div class="empty-state">
+        No holders yet. Be the first to mint.<br>
+        <a href="/play" class="cta">Try the playground →</a>
+      </div>`;
+  }
+
+  function renderError(msg) {
+    document.getElementById('board').innerHTML =
+      `<div class="error-state">${escHtml(msg)}</div>`;
+  }
+
+  function fmtStat(n) {
+    if (n == null) return '<span class="lb-stat dim">—</span>';
+    return `<span class="lb-stat">${n}</span>`;
+  }
+
+  function renderBoard(holders) {
+    if (!holders.length) { renderEmpty(); return; }
+    const headRow = `
+      <div class="lb-row head">
+        <span>#</span>
+        <span>holder</span>
+        <span class="col-collections" style="text-align:right">colls</span>
+        <span class="col-tokens" style="text-align:right">nfts</span>
+        <span class="col-dustopias" style="text-align:right">d-tokens</span>
+      </div>`;
+    const rows = holders.map((h, i) => {
+      const rank = i + 1;
+      const rankCls = rank <= 3 ? ' top' : '';
+      return `
+        <a class="lb-link" href="/holder/${encodeURIComponent(h.owner)}">
+          <div class="lb-row">
+            <span class="lb-rank${rankCls}">${rank}</span>
+            <span class="lb-holder">
+              <span class="lb-avatar">
+                <img src="${API_URL}/api/preview/${escHtml(h.sampleTokenId)}"
+                     alt="" loading="lazy" decoding="async">
+              </span>
+              <span class="lb-addr" title="${escHtml(h.owner)}">${escHtml(shortAddr(h.owner))}</span>
+            </span>
+            <span class="col-collections">${fmtStat(h.collections)}</span>
+            <span class="col-tokens">${fmtStat(h.tokens)}</span>
+            <span class="col-dustopias"><span class="lb-stat">${h.dustopias}</span></span>
+          </div>
+        </a>`;
+    }).join('');
+    document.getElementById('board').innerHTML = `
+      <div class="lb-table">${headRow}${rows}</div>`;
+  }
+
+  // State + sort wiring.
+  let state = { holders: [], mode: 'collections' };
+
+  document.getElementById('sortRow').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    state.mode = btn.dataset.mode;
+    for (const b of document.querySelectorAll('#sortRow button')) {
+      b.classList.toggle('active', b.dataset.mode === state.mode);
+    }
+    renderBoard(sortHolders(state.holders, state.mode));
+  });
+
+  async function init() {
+    renderSkeletons();
+    let data;
+    try {
+      const r = await fetch(`${API_URL}/api/all-tokens`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      data = await r.json();
+    } catch (e) {
+      renderError(`Couldn't load leaderboard: ${e.message}`);
+      return;
+    }
+    const tokens = Array.isArray(data.tokens) ? data.tokens : [];
+    state.holders = aggregate(tokens);
+    renderBoard(sortHolders(state.holders, state.mode));
+  }
+
+  init();
+</script>
+
+</body>
+</html>

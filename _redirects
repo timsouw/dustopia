@@ -4,9 +4,10 @@
 # explicit catch-all last so Pages doesn't auto-inject its own SPA fallback
 # above ours.
 
-/embed/*     /embed/      200
-/configure/* /configure/  200
-/holder/*    /holder/     200
-/gallery     /gallery/    200
-/play        /play/       200
-/*           /index.html  200
+/embed/*       /embed/        200
+/configure/*   /configure/    200
+/holder/*      /holder/       200
+/gallery       /gallery/      200
+/leaderboard   /leaderboard/  200
+/play          /play/         200
+/*             /index.html    200
