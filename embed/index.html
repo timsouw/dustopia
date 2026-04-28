@@ -2295,9 +2295,11 @@ async function main() {
     // dy>0 means finger moved down. Natural feel = sphere rotates so
     // the TOP tilts toward the viewer when you drag down (and away
     // when you drag up). Subtract dy so the rotation axis aligns with
-    // how every map / 3D-viewer app does pitch.
+    // how every map / 3D-viewer app does pitch. Pitch is unbounded —
+    // the sphere happily wraps past ±90° and keeps rotating, like a
+    // globe you flip over. (Earlier versions clamped to ±1.2 rad as
+    // a precaution that wasn't actually necessary.)
     userPitch -= dy * 0.006;
-    userPitch = Math.max(-1.2, Math.min(1.2, userPitch));
     lastX = e.clientX; lastY = e.clientY;
   });
   canvas.addEventListener('pointerup', e => {
@@ -2325,9 +2327,11 @@ async function main() {
       // two-finger swipe — orbit in the direction of finger motion.
       // Threshold keeps real mousewheel scrolls (integer steps ≥ 4 on most mice)
       // routed to zoom, while high-frequency trackpad events go to orbit.
+      // Sign on pitch matches the pointer handler above (deltaY > 0 =
+      // swipe down = top of sphere tilts toward viewer). Pitch is
+      // unbounded; sphere wraps freely past ±90°.
       userYaw   += e.deltaX * 0.004;
-      userPitch += e.deltaY * 0.004;
-      userPitch = Math.max(-1.2, Math.min(1.2, userPitch));
+      userPitch -= e.deltaY * 0.004;
     } else {
       // traditional mouse wheel — zoom
       const f = Math.exp(-e.deltaY * 0.0012);
