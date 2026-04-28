@@ -574,10 +574,18 @@ async function fetchImagesParallelLive(urlLists, concurrency, onProgress) {
 }
 
 // Build a meta object from {nft} pairs. Cheap; no canvas work.
+//
+// `contract` is the normalised lowercase address — needed by the
+// selection-mask path so we can match per-slot tokens against
+// selection.collections / selection.tokens entries (both of which are
+// keyed by contract address). `collection` stays the human-readable
+// display name for any future UI that wants it.
 function buildAtlasMeta(pairs) {
   const tileSize = LIVE_TILE;
   const tokens = pairs.map(p => ({
     collection: (p.nft.contract && p.nft.contract.name) || (p.nft.contract && p.nft.contract.address) || 'unknown',
+    contract:   (p.nft.contract && p.nft.contract.address)
+                  ? p.nft.contract.address.toLowerCase() : '',
     tokenId:    p.nft.tokenId != null ? String(p.nft.tokenId) : '',
   }));
   return {
@@ -1334,8 +1342,19 @@ async function buildLiveData(input) {
   // Apply the holder's selection (no-op when mode='all'). Done before the
   // image fetch so we don't waste bandwidth pulling thumbnails for tokens
   // the owner deliberately excluded.
-  nfts = filterNftsBySelection(nfts, selection);
-  if (!nfts.length) throw new Error('selection produced no NFTs to render');
+  //
+  // EXCEPT in preview mode (the /configure picker iframe). There the
+  // user is actively iterating on which collections show — every
+  // checkbox click would otherwise reload the iframe and re-fetch.
+  // Preview-mode fetches the full wallet once, then applies the
+  // selection as a per-slot loadedMask via postMessage. Toggle
+  // becomes a single byte write, no network round-trip.
+  if (!window.__dustopiaPreview) {
+    nfts = filterNftsBySelection(nfts, selection);
+    if (!nfts.length) throw new Error('selection produced no NFTs to render');
+  } else if (!nfts.length) {
+    throw new Error('wallet has no NFTs to render');
+  }
 
   // Filter: drop Alchemy-flagged spam ONLY in 'all' mode; in 'subset'
   // mode the holder's selection is the source of truth (Alchemy's spam
@@ -1586,6 +1605,86 @@ async function main() {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  // ── Live selection mask state ────────────────────────────────
+  // The vertex shader culls particles whose loadedMask byte is 0.
+  // We treat that mask as a combined "loaded AND selected" flag so
+  // /configure can flip selection on/off without reloading the iframe
+  // — toggle becomes a single texSubImage2D byte write per affected
+  // slot.
+  //
+  //   loadedSlots[i]   = 1 once the thumbnail is in the atlas
+  //   selectedSlots[i] = 1 if token i is in the active selection
+  //   mask byte        = (loadedSlots[i] && selectedSlots[i]) ? 255 : 0
+  //
+  // Cache-hit path: loadedSlots starts all-1 (the atlas was already
+  // complete). Progressive path: starts all-0 and grow flips them.
+  const loadedSlots   = new Uint8Array(N);
+  if (!built.progressive) loadedSlots.fill(1);
+  const selectedSlots = new Uint8Array(N);
+  let currentSelection = built.selection || { mode: 'all', collections: [], tokens: [] };
+
+  function recomputeSelectedSlots() {
+    if (!currentSelection || currentSelection.mode === 'all') {
+      selectedSlots.fill(1);
+      return;
+    }
+    const cols = new Set((currentSelection.collections || []).map(s => String(s).toLowerCase()));
+    const tks  = new Set((currentSelection.tokens || []).map(x => `${String(x.contract).toLowerCase()}:${x.tokenId}`));
+    for (let i = 0; i < N; i++) {
+      const t = built.meta.tokens[i] || {};
+      const c = (t.contract || '').toLowerCase();
+      const id = t.tokenId != null ? String(t.tokenId) : '';
+      selectedSlots[i] = (cols.has(c) || tks.has(`${c}:${id}`)) ? 1 : 0;
+    }
+  }
+
+  function rewriteMaskFromState() {
+    for (let i = 0; i < N; i++) {
+      loadedMaskData[i] = (loadedSlots[i] && selectedSlots[i]) ? 255 : 0;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, loadedMaskTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, 1, gl.RED, gl.UNSIGNED_BYTE, loadedMaskData);
+  }
+
+  // Single-byte fast path used by progressive grow when one slot's
+  // image just landed. Avoids the full N-byte rewrite per image.
+  const _maskByteScratch = new Uint8Array(1);
+  function markSlotLoaded(slot) {
+    loadedSlots[slot] = 1;
+    const v = selectedSlots[slot] ? 255 : 0;
+    if (loadedMaskData[slot] === v) return;
+    loadedMaskData[slot] = v;
+    _maskByteScratch[0] = v;
+    gl.bindTexture(gl.TEXTURE_2D, loadedMaskTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, slot, 0, 1, 1, gl.RED, gl.UNSIGNED_BYTE, _maskByteScratch);
+  }
+
+  // Initial computation. In preview mode we always fetched the full
+  // wallet, so selectedSlots is the only thing that thins the render
+  // down to the holder's choice. Outside preview the wallet was
+  // already pre-filtered by selection at fetch time, so every slot
+  // is selected by definition — recompute still works.
+  recomputeSelectedSlots();
+  rewriteMaskFromState();
+
+  // Selection update handler. Same-origin postMessage from /configure
+  // (or any future controller). Replaces the old "reload the iframe
+  // with a new ?sel= param" flow — toggle is now a CPU + GL state
+  // refresh, no fetch.
+  function applySelectionMask(newSelection) {
+    if (!newSelection || typeof newSelection !== 'object') return;
+    if (newSelection.mode !== 'all' && newSelection.mode !== 'subset') return;
+    currentSelection = newSelection;
+    recomputeSelectedSlots();
+    rewriteMaskFromState();
+  }
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin) return;
+    if (!e.data || typeof e.data !== 'object') return;
+    if (e.data.type !== 'dustopia:set-selection') return;
+    applySelectionMask(e.data.selection);
+  });
 
   // =============================================================
   // 4) HISTORY TEXTURES (float32, width=N, height=HISTORY_LEN)
@@ -2570,10 +2669,6 @@ async function main() {
   // Skipped on the cache hit path (built.progressive is undefined
   // there — the atlas was already complete in R2).
   if (built.progressive && typeof built.grow === 'function') {
-    // Single shared 1-byte buffer for the loaded-mask updates. The
-    // texSubImage2D path needs an ArrayBufferView; reusing one cell
-    // keeps allocations off the per-image hot path.
-    const _maskOne = new Uint8Array([255]);
     built.grow({
       onSlotReady: (slot, tx, ty, tileSize, rgbBytes) => {
         gl.bindTexture(gl.TEXTURE_2D, atlasTex);
@@ -2583,14 +2678,12 @@ async function main() {
           tx, ty, tileSize, tileSize,
           gl.RGB, gl.UNSIGNED_BYTE, rgbBytes,
         );
-        // Flip this slot's mask byte to 255 so the vertex shader stops
-        // culling its 36 864 particles starting on the next frame.
-        gl.bindTexture(gl.TEXTURE_2D, loadedMaskTex);
-        gl.texSubImage2D(
-          gl.TEXTURE_2D, 0,
-          slot, 0, 1, 1,
-          gl.RED, gl.UNSIGNED_BYTE, _maskOne,
-        );
+        // Mark this slot loaded; markSlotLoaded composes the
+        // load-state with the current selection mask and writes the
+        // resulting byte to GL. If the holder has unselected this
+        // collection, the slot stays culled even after the image
+        // lands — exactly what we want.
+        markSlotLoaded(slot);
       },
       onProgress: (done, total) => {
         setProgress(done / Math.max(1, total), true);

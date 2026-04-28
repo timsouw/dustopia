@@ -958,26 +958,28 @@ function onTreeClick(e) {
 }
 
 // ── Live preview iframe sync ─────────────────────────────────
-// Selection updates are pushed to the iframe by reloading it with a new
-// `&sel=<base64-json>` query param. The renderer in index.html decodes it
-// and renders that subset (skipping the saved-config lookup). Reloading
-// is simpler than postMessage hot-rebuild and gives us a clean iframe
-// `load` event to clear the stale indicator.
-function schedulePushSelection(delayMs = 800) {
+// Selection updates are pushed to the iframe via postMessage rather
+// than a full iframe reload. The /embed renderer in preview mode
+// fetches the entire wallet up-front and treats selection as a
+// per-slot mask, so a checkbox toggle is one byte write per affected
+// slot — instant, no network round-trip. Compared with the old
+// reload-with-?sel= flow this saves the 30-60s rebuild on every edit.
+//
+// We still debounce so a fast click-storm doesn't fire 50 messages.
+function schedulePushSelection(delayMs = 120) {
   if (editor.pushTimer) clearTimeout(editor.pushTimer);
-  editor.iframeStale = true;
-  $('#previewStale')?.classList.add('show');
   editor.pushTimer = setTimeout(pushSelectionToIframe, delayMs);
 }
 function pushSelectionToIframe() {
   const fr = $('#previewFrame');
-  if (!fr) return;
+  if (!fr || !fr.contentWindow) return;
   const selection = serializeSelection(editor.byCollection, editor.selected, editor.mode);
-  const sel = btoa(JSON.stringify(selection));
-  fr.src = `/embed/${state.address}?token=${editor.tokenId}&preview=1&sel=${encodeURIComponent(sel)}&t=${Date.now()}`;
-  // The iframe will postMessage 'dustopia:built' when its sphere first
-  // paints; the listener below clears the stale badge at that point.
-  // iframe `load` is too early — atlas build adds another 5-10s.
+  try {
+    fr.contentWindow.postMessage(
+      { type: 'dustopia:set-selection', selection },
+      location.origin,
+    );
+  } catch { /* iframe not yet ready / cross-origin sandbox — silently ignore */ }
 }
 
 // Listener for the iframe's first-paint signal. Same-origin only — we
@@ -1026,30 +1028,24 @@ async function onSaveClick() {
       const detail = await r.text().catch(() => '');
       throw new Error(`save failed (HTTP ${r.status}) ${detail}`);
     }
-    // Success — flash a confirm + force the preview iframe to reload
-    // through the standard config path (so what we see on /configure
-    // matches what OpenSea will fetch on its next refresh).
+    // Success — the iframe already shows what was just saved (the
+    // mask was kept in sync with editor state via postMessage), so
+    // no reload needed. Wait a moment for the swarm to settle, then
+    // ask the iframe to re-capture the OpenSea preview WebP. Worker
+    // already deleted preview/<addr>.bin and purged the edge cache
+    // on PUT; the capture fills R2 with the new render.
     editor.saving = false;
     refreshSidebar();
     const fr = $('#previewFrame');
-    if (fr) {
-      fr.src = `/embed/${state.address}?token=${editor.tokenId}&preview=1&t=${Date.now()}`;
-      // Once the iframe finishes building the sphere with the saved
-      // selection, ask it to re-capture the preview WebP so OpenSea
-      // and the landing pick up the new look on their next fetch.
-      // Worker already deleted preview/<addr>.bin and purged the edge
-      // cache on PUT, but a fresh capture is what fills R2 again.
-      // PREVIEW_DELAY_MS in /embed waits for the swarm to settle
-      // before snapping; we wait at least that long before pinging.
-      const onceReady = (e) => {
-        if (e.origin !== location.origin) return;
-        if (!e.data || e.data.type !== 'dustopia:built') return;
-        window.removeEventListener('message', onceReady);
-        setTimeout(() => {
-          fr.contentWindow?.postMessage({ type: 'dustopia:capture' }, location.origin);
-        }, 5000);
-      };
-      window.addEventListener('message', onceReady);
+    if (fr && fr.contentWindow) {
+      // Push the saved selection one more time as a defensive sync,
+      // in case any pending push-debounce was still queued.
+      try {
+        fr.contentWindow.postMessage({ type: 'dustopia:set-selection', selection }, location.origin);
+      } catch {}
+      setTimeout(() => {
+        try { fr.contentWindow?.postMessage({ type: 'dustopia:capture' }, location.origin); } catch {}
+      }, 5000);
     }
     $('#saveSummary').textContent = '✓ saved · ' + saveSummaryText();
   } catch (e) {
