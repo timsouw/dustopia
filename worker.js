@@ -1330,6 +1330,18 @@ async function handleWebhookTransfer(request, env, ctx) {
       env.WALLET_CACHE.delete(`owner:${NFT_CONTRACT.toLowerCase()}:${id}`).catch(() => {})
     )));
   }
+  // Edge-cache purge for /api/preview/<tokenId>. Without this, OpenSea
+  // and the landing keep serving the old owner's preview WebP for up
+  // to max-age (5 min) even though the underlying R2 entry is now
+  // pointing at the new owner. Per-colo purge — propagates as other
+  // colos see fresh requests.
+  if (ctx) {
+    const baseUrl = new URL(request.url);
+    ctx.waitUntil(Promise.all(ids.map((id) => {
+      const u = new URL(`/api/preview/${id}`, baseUrl.origin);
+      return caches.default.delete(new Request(u.toString())).catch(() => {});
+    })));
+  }
   return jsonResponse({ ok: true, cleared: ids.length, tokenIds: ids }, request);
 }
 

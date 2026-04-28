@@ -88,7 +88,9 @@ and reload.** `node_modules/` exists only because viem ships from npm.
   because the custom domain is bound to that specific Worker name)
 - KV namespace: `WALLET_CACHE` (id in `wrangler.toml`)
 - R2 bucket: `dustopia-atlas` (atlas binaries + per-token configs + preview captures)
-- Worker secrets: `ALCHEMY_KEY` (Alchemy NFT API key; never commit)
+- Worker secrets:
+  - `ALCHEMY_KEY` — Alchemy NFT API key (never commit)
+  - `WEBHOOK_SECRET` — Alchemy Notify signing secret (HMAC verification on `/api/webhook/transfer`)
 
 ## Alchemy
 
@@ -205,6 +207,27 @@ with `wrangler deploy`. Frontend can then call it.
 CSS lives at the top of each HTML file in a `<style>` block. Light theme uses
 `body.light` selectors. Same `franken-theme` localStorage key syncs choice
 across landing / play / embed / configure.
+
+### Wire up Alchemy Notify (one-time)
+The Worker has an `/api/webhook/transfer` endpoint that wipes a token's
+saved selection + owner cache + edge-cached preview when the NFT changes
+hands. To activate:
+
+1. Set the secret on the Worker:
+   ```bash
+   echo "<alchemy-signing-key>" | npx wrangler secret put WEBHOOK_SECRET
+   ```
+2. In Alchemy dashboard → Notify → "Address Activity" webhook
+   - Network: Ethereum mainnet
+   - URL: `https://api.dustopia.xyz/api/webhook/transfer`
+   - Addresses: `0x8196e52111255d71732c2187F0F8420704417cE6` (the Drops contract)
+   - Categories: `external`, `internal` aren't needed; activate ERC-721 transfers
+3. Copy the signing key shown after creation back into the secret.
+
+After this, every Transfer event fires the webhook → handler verifies HMAC,
+deletes `config/<tokenId>.json` from R2, clears the KV `owner:` cache, and
+purges the edge cache for `/api/preview/<tokenId>`. New owner sees a clean
+default; OpenSea picks up the new render on its next refresh.
 
 ---
 
