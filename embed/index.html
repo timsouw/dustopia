@@ -457,7 +457,14 @@ async function fetchAllNFTsLive(owner, onProgress) {
     let u;
     if (API_URL) {
       // Through our Worker proxy: /api/wallet/<address>?pageKey=...
+      // ?spam=include surfaces everything Alchemy knows about. The
+      // false-positive rate of their classifier is high enough that
+      // legitimate collections (CryptoPunks v1, older blue chips) get
+      // dropped — better to receive the full set and let the per-mode
+      // filter below decide. In 'all' mode we still drop isSpam=true,
+      // but in 'subset' mode the holder's explicit selection wins.
       u = new URL(`${API_URL}/api/wallet/${owner}`);
+      u.searchParams.set('spam', 'include');
       if (pageKey) u.searchParams.set('pageKey', pageKey);
     } else {
       // Fallback: direct Alchemy call (local dev only — exposes API key).
@@ -1190,10 +1197,15 @@ async function buildLiveData(input) {
   nfts = filterNftsBySelection(nfts, selection);
   if (!nfts.length) throw new Error('selection produced no NFTs to render');
 
-  // Filter: not spam + has at least one image URL
+  // Filter: drop Alchemy-flagged spam ONLY in 'all' mode; in 'subset'
+  // mode the holder's selection is the source of truth (Alchemy's spam
+  // classifier sometimes flags legit collections like CryptoPunks v1
+  // — if a holder explicitly picked a contract, render it). Skip
+  // anything without at least one image URL either way.
+  const trustSelection = selection && selection.mode === 'subset';
   const candidates = [];
   for (const n of nfts) {
-    if (n.isSpam) continue;
+    if (!trustSelection && n.isSpam) continue;
     const urls = pickImageUrls(n);
     if (!urls.length) continue;
     candidates.push({ nft: n, urls });
