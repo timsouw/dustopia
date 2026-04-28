@@ -83,6 +83,8 @@
   .nav-link:hover { color:#e7e7ea; background:rgba(255,255,255,.05); }
   body.light .nav-link { color:#71717a; }
   body.light .nav-link:hover { color:#18181b; background:rgba(0,0,0,.04); }
+  .nav-link.current { color:#e7e7ea; background:rgba(255,255,255,.06); }
+  body.light .nav-link.current { color:#18181b; background:rgba(0,0,0,.05); }
 
   .icon-btn {
     background:transparent; border:1px solid rgba(255,255,255,.14);
@@ -100,8 +102,16 @@
      edge. When the nav collapses on mobile, .bar-actions stays anchored
      to the right because it inherits the position from the parent flex
      row, while .nav-links breaks out absolutely as a dropdown. */
-  .nav-links { margin-left:auto; }
-  .bar-actions { display:flex; align-items:center; }
+  /* On mobile the .nav-links is position:absolute when the dropdown
+     is open; if it had the only auto margin, .bar-actions would slide
+     left next to .brand. Anchor .bar-actions on its own; on desktop
+     the media query below restores the nav-links auto-margin so the
+     links group stays right-aligned next to the actions. */
+  .bar-actions { display:flex; align-items:center; margin-left:auto; }
+  @media (min-width: 721px) {
+    .nav-links { margin-left:auto; }
+    .bar-actions { margin-left:0; }
+  }
 
 
   /* Mobile hamburger — see landing page for the same pattern. */
@@ -422,8 +432,11 @@
     </a>
     <nav class="nav-links" aria-label="primary">
       <a href="/#how" class="nav-link">how it works</a>
-      <a href="/#stack" class="nav-link">stack</a>
+      <a href="/pfp" class="nav-link">save as pfp</a>
+      <a href="/play" class="nav-link current">play</a>
       <a href="/configure" class="nav-link">configure</a>
+      <a href="/gallery" class="nav-link">gallery</a>
+      <a href="/leaderboard" class="nav-link">leaderboard</a>
     </nav>
     <div class="bar-actions">
       <button id="themeBtn" class="icon-btn" type="button" aria-label="toggle theme" title="toggle theme">
