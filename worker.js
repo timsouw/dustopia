@@ -241,6 +241,119 @@ async function handleOwned(addr, request, env) {
   return jsonResponse(body, request, { headers: { 'X-Cache': 'MISS' } });
 }
 
+// =====================================================================
+// /api/all-tokens — enumerate every minted token + its current owner +
+// (when available) the owner's sphere stats. Used by /gallery and
+// /leaderboard. KV-cached briefly because totalSupply rarely changes
+// and per-token owner lookups are themselves cached.
+//
+// The endpoint walks 1..totalSupply, calls the existing lookupOwner()
+// helper (which is itself KV-backed), and pulls per-owner stats from
+// readOwnerSummary() (which reads cached atlas meta from R2). Owners
+// who haven't rendered their sphere yet show up with null stats —
+// frontend renders gracefully.
+//
+// Cache TTL is short (5 min) so the leaderboard / gallery feel fresh
+// when transfers happen, but long enough that bursts don't fan-out.
+// =====================================================================
+const ALL_TOKENS_TTL          = 5 * 60;     // 5 min full-response cache
+const ALL_TOKENS_HARD_CAP     = 2000;       // safety cap on enumeration
+const ALL_TOKENS_CONCURRENCY  = 25;         // owner-lookup parallelism
+const TOTAL_SUPPLY_TTL        = 60;         // 1 min per-totalSupply cache
+
+async function fetchTotalSupply(env) {
+  const cacheKey = `totalsupply:${NFT_CONTRACT.toLowerCase()}`;
+  const cached = await env.WALLET_CACHE.get(cacheKey);
+  if (cached) {
+    const n = Number(cached);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  // ABI: totalSupply() — selector 0x18160ddd, no args.
+  const url = `https://eth-mainnet.g.alchemy.com/v2/${env.ALCHEMY_KEY}`;
+  let json;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ALCH_TIMEOUT_MS);
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'eth_call',
+        params: [{ to: NFT_CONTRACT, data: '0x18160ddd' }, 'latest'],
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) return 0;
+    json = await r.json();
+  } catch { return 0; }
+  if (json.error || !json.result || json.result === '0x') return 0;
+  let n;
+  try { n = Number(BigInt(json.result)); }
+  catch { return 0; }
+  if (!Number.isFinite(n) || n < 0) return 0;
+  env.WALLET_CACHE.put(cacheKey, String(n), { expirationTtl: TOTAL_SUPPLY_TTL }).catch(() => {});
+  return n;
+}
+
+async function handleAllTokens(request, env, ctx) {
+  const cacheKey = `all-tokens:v1`;
+  const cached = await env.WALLET_CACHE.get(cacheKey);
+  if (cached) {
+    return jsonResponse(cached, request, { headers: { 'X-Cache': 'HIT' } });
+  }
+
+  const totalSupply = await fetchTotalSupply(env);
+  const enumerateUpTo = Math.min(totalSupply, ALL_TOKENS_HARD_CAP);
+  const ids = Array.from({ length: enumerateUpTo }, (_, i) => i + 1);
+
+  // Parallel owner lookups in chunks to respect Alchemy's free-tier
+  // 25 req/s burst limit.
+  const owners = new Array(ids.length);
+  for (let off = 0; off < ids.length; off += ALL_TOKENS_CONCURRENCY) {
+    const slice = ids.slice(off, off + ALL_TOKENS_CONCURRENCY);
+    const results = await Promise.all(slice.map(id => lookupOwner(String(id), env)));
+    for (let i = 0; i < results.length; i++) owners[off + i] = results[i];
+  }
+
+  // Owner summaries: only one R2 call per UNIQUE owner (multi-token
+  // holders share the same atlas meta).
+  const uniqueOwners = [...new Set(owners.filter(Boolean))];
+  const summaryEntries = await Promise.all(
+    uniqueOwners.map(async (o) => [o, await readOwnerSummary(o, env)])
+  );
+  const summaryByOwner = new Map(summaryEntries);
+
+  const tokens = [];
+  for (let i = 0; i < ids.length; i++) {
+    const owner = owners[i];
+    if (!owner) continue;
+    const s = summaryByOwner.get(owner);
+    tokens.push({
+      tokenId:     ids[i],
+      owner,
+      tokens:      s ? s.tokens      : null,
+      collections: s ? s.collections : null,
+    });
+  }
+
+  const body = JSON.stringify({
+    totalSupply,
+    returned: tokens.length,
+    tokens,
+  });
+  if (ctx) ctx.waitUntil(
+    env.WALLET_CACHE.put(cacheKey, body, { expirationTtl: ALL_TOKENS_TTL })
+                    .catch(() => {})
+  );
+  return jsonResponse(body, request, {
+    headers: {
+      'X-Cache':       'MISS',
+      'Cache-Control': `public, max-age=${ALL_TOKENS_TTL}`,
+    },
+  });
+}
+
 // The drop contract's baseURI is set to https://api.dustopia.xyz/api/metadata/
 // so tokenURI(N) becomes /api/metadata/N. We respond with a standard ERC-721
 // metadata JSON whose animation_url loads the live sphere of the token's
@@ -1325,6 +1438,11 @@ export default {
     const ownedMatch = path.match(/^\/api\/owned\/([^/]+)\/?$/);
     if (ownedMatch) {
       return handleOwned(ownedMatch[1], request, env);
+    }
+
+    // /api/all-tokens — every minted tokenId + owner + sphere stats
+    if (path === '/api/all-tokens') {
+      return handleAllTokens(request, env, ctx);
     }
 
     return errorResponse(404, 'not found', request);
