@@ -117,9 +117,15 @@
   .status-line.err { color:#ff7e7e; }
   body.light .status-line.err { color:#b91c1c; }
 
-  /* Editor split layout */
+  /* Editor split layout. Equal columns so the picker reads at the same
+     visual weight as the live preview — no more "huge sphere + tiny
+     sidebar" imbalance. The picker matches the preview's square aspect
+     ratio on desktop so both panes feel like the same artefact, with
+     the collection list scrolling internally instead of growing the
+     page. Mobile collapses to a single column and lets the picker grow
+     naturally. */
   .editor-grid {
-    display:grid; grid-template-columns:minmax(320px, 1fr) minmax(320px, 440px);
+    display:grid; grid-template-columns:1fr 1fr;
     gap:24px; align-items:start;
   }
   @media (max-width: 880px) { .editor-grid { grid-template-columns:1fr; } }
@@ -152,9 +158,19 @@
     background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.08);
     border-radius:14px; padding:16px;
     display:flex; flex-direction:column; gap:14px;
-    min-height:480px;
+    /* Square on desktop so the picker visually matches the preview;
+       the .tree below has flex:1 + overflow:auto so the collection
+       list scrolls inside this fixed box instead of pushing the page. */
+    aspect-ratio:1 / 1;
+    min-height:0;
   }
   body.light .editor-side { background:#fff; border-color:rgba(0,0,0,.08); }
+  @media (max-width: 880px) {
+    .editor-side {
+      aspect-ratio:auto;
+      min-height:480px;
+    }
+  }
 
   .mode-toggle { display:flex; gap:6px; padding:3px; background:rgba(255,255,255,.05); border-radius:8px; }
   body.light .mode-toggle { background:rgba(0,0,0,.05); }
