@@ -224,9 +224,14 @@
   body.light .dl-btn:hover { background:#000; }
   .dl-btn .arrow { font-size:14px; line-height:1; }
 
-  /* Tiny apple-style spinner shown while we capture */
+  /* Tiny apple-style spinner shown while we capture. inline-block +
+     vertical-align so it sits cleanly next to the status text instead
+     of collapsing into a zero-height inline run (Safari was showing the
+     12 absolutely-positioned spans as garbled punctuation). */
   .spinner {
+    display:inline-block; vertical-align:-3px;
     width:14px; height:14px; position:relative;
+    margin-right:6px;
   }
   .spinner span {
     position:absolute; left:50%; top:50%; width:1.6px; height:4px;
@@ -311,7 +316,7 @@
     </div>
     <aside class="pfp-side">
       <h2>Preview</h2>
-      <p>Wait for the sphere to settle (≈10 seconds). When it stops jittering, click Download.</p>
+      <p>First-time builds for unseen wallets take 1–3 minutes (we have to fetch every NFT thumbnail and stitch them into an atlas). Once the sphere appears and stops jittering, click Download.</p>
       <div class="status" id="pfpStatus"><span class="spinner" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span> building sphere…</div>
       <button class="dl-btn" id="dlBtn" type="button" disabled>Download 2000×2000 PNG <span class="arrow">↓</span></button>
       <p class="mono" id="addrEcho" style="font-size:11px"></p>
