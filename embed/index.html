@@ -1719,6 +1719,18 @@ async function main() {
       cd.radiusPhase = rng() * Math.PI * 2;
       cd.radiusFreq  = 0.06 + rng() * 0.10;   // 0.06–0.16 rad/s → 40–105s per cycle
       cd.radiusOffset = (LAYER_INNER_R + LAYER_OUTER_R) / 2;  // start at mid-shell, animation takes over
+
+      // Per-flock drifting orbit axis. Each collection gets its own
+      // random unit-vector axis + a slow rotation rate, so flocks no
+      // longer all precess in lockstep around the global Y. Sphere
+      // feels alive without the user dragging — different bands
+      // rotate around different axes at different rates.
+      // Rate ~0.02-0.08 rad/s → 80-300 s per full revolution; sign
+      // randomised so half drift each way.
+      const oax = rng() - 0.5, oay = rng() - 0.5, oaz = rng() - 0.5;
+      const oaMag = Math.sqrt(oax*oax + oay*oay + oaz*oaz) + 1e-9;
+      cd.orbitAxis = [oax/oaMag, oay/oaMag, oaz/oaMag];
+      cd.orbitFreq = (0.02 + rng() * 0.06) * (rng() < 0.5 ? -1 : 1);
     }
 
     // 6d. Spawn each token clustered near its collection seed
@@ -1778,6 +1790,28 @@ async function main() {
   const bigWaveTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB32F, N, 1, 0, gl.RGB, gl.FLOAT, bigWaveArr);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  // Per-flock drifting orbit axis. RGBA32F, width=N: xyz=axis (unit
+  // vec), w=angular rate (rad/s). Each frame the shader rotates the
+  // particle around its collection's axis by u_t × rate via Rodrigues'
+  // formula, on top of the global yaw/pitch so flocks visibly drift
+  // independently while the user can still drag the whole sphere.
+  const orbitAxisArr = new Float32Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    const cd = collectionData[collectionIdx[i]];
+    const ax = cd.orbitAxis;
+    orbitAxisArr[i*4]     = ax[0];
+    orbitAxisArr[i*4 + 1] = ax[1];
+    orbitAxisArr[i*4 + 2] = ax[2];
+    orbitAxisArr[i*4 + 3] = cd.orbitFreq;
+  }
+  const orbitAxisTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, orbitAxisTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, N, 1, 0, gl.RGBA, gl.FLOAT, orbitAxisArr);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -1867,6 +1901,7 @@ async function main() {
   uniform sampler2D u_tokPhaseTex;   // precomputed per-token phase (was fract(sin(...)) in shader)
   uniform sampler2D u_windLoTex;     // precomputed per-token low-freq wind (was 3 sin() in shader)
   uniform sampler2D u_loadedMask;    // R8 1D mask, 255 = token's thumbnail is in atlas, 0 = still pending
+  uniform sampler2D u_orbitAxisTex;  // RGBA32F 1D: xyz = per-flock orbit axis, w = drift rate (rad/s)
 
   uniform int   u_grid;
   uniform int   u_histLen;
@@ -1974,6 +2009,20 @@ async function main() {
     // Each collection sits at its own depth shell instead of all on r=1.
     pos          *= (bw.z + wave + bigWave);
 
+    // Per-flock drifting orbit. Each collection has its own random
+    // unit-vector axis + rate; all of its tokens precess together
+    // around that axis at u_t × rate. Applied BEFORE global yaw/pitch
+    // so the user's drag still rotates the whole composition, while
+    // each flock keeps its own internal motion. Rodrigues' formula:
+    //   v' = v·c + (k × v)·s + k·(k·v)·(1-c)
+    vec4  orbit  = texelFetch(u_orbitAxisTex, ivec2(tokenIdx, 0), 0);
+    vec3  oAxis  = orbit.xyz;
+    float oAng   = u_t * orbit.w;
+    float oCos   = cos(oAng), oSin = sin(oAng);
+    pos = pos * oCos
+        + cross(oAxis, pos) * oSin
+        + oAxis * dot(oAxis, pos) * (1.0 - oCos);
+
     // world rotation — yaw (Y) then pitch (X); all trig precomputed on CPU
     // and passed as u_rotTrig = (cos_yaw, sin_yaw, cos_pitch, sin_pitch).
     // Eliminated: 4 transcendentals per vertex (cos/sin × 2).
@@ -2071,7 +2120,7 @@ async function main() {
   const U = {};
   [
     'posTex','fwdTex','atlas','bigWaveTex','tokPhaseTex','windLoTex',
-    'loadedMask',
+    'loadedMask','orbitAxisTex',
     'grid','histLen','ringHead',
     'laneWidth','shearFactor','waveAmp','sphereR','t','rotTrig',
     'center','viewport','tilesPerRow','tileSize',
@@ -2453,6 +2502,7 @@ async function main() {
       gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);    gl.uniform1i(U.bigWaveTex, 4);
       gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, tokPhaseTex);   gl.uniform1i(U.tokPhaseTex, 5);
       gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, windLoTex);     gl.uniform1i(U.windLoTex, 6);
+      gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, orbitAxisTex);  gl.uniform1i(U.orbitAxisTex, 7);
 
       gl.uniform1i(U.grid, GRID);
       gl.uniform1i(U.histLen, HISTORY_LEN);
