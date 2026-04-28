@@ -88,13 +88,19 @@
     border-bottom-color:rgba(0,0,0,.06);
   }
   header .bar {
-    display:flex; align-items:center; justify-content:space-between;
+    display:flex; align-items:center;
     height:54px;
   }
   .brand {
     display:flex; align-items:center; gap:10px;
     font-size:14px; font-weight:600; letter-spacing:-0.01em;
   }
+  /* Push the nav (and the bar-actions cluster after it) to the right
+     edge. When the nav collapses on mobile, .bar-actions stays anchored
+     to the right because it inherits the position from the parent flex
+     row, while .nav-links breaks out absolutely as a dropdown. */
+  .nav-links { margin-left:auto; }
+  .bar-actions { display:flex; align-items:center; }
   .brand-mark {
     width:18px; height:18px; border-radius:50%;
     background:radial-gradient(38% 32% at 38% 32%,
@@ -408,6 +414,8 @@
       <a href="/play" class="nav-link">play</a>
       <a href="/pfp" class="nav-link">pfp</a>
       <a href="/configure" class="nav-link">configure</a>
+    </nav>
+    <div class="bar-actions">
       <button id="themeBtn" class="icon-btn" type="button" aria-label="toggle theme" title="toggle theme">
         <!-- moon (dark mode toggle) — replaced with sun via JS in light mode -->
         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>
@@ -419,7 +427,7 @@
           <rect x="2" y="11.25" width="12" height="1.5" rx="0.75"/>
         </svg>
       </button>
-    </nav>
+    </div>
   </div>
 </header>
 
