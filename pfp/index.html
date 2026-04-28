@@ -223,6 +223,30 @@
   body.light .dl-btn { background:#18181b; color:#fafafa; }
   body.light .dl-btn:hover { background:#000; }
   .dl-btn .arrow { font-size:14px; line-height:1; }
+  /* Secondary download (MP4) — outline style so visual hierarchy reads
+     PNG-as-primary, MP4-as-companion. */
+  .dl-btn.dl-btn-secondary {
+    background:transparent;
+    color:inherit;
+    border:1px solid rgba(255,255,255,.20);
+  }
+  .dl-btn.dl-btn-secondary:hover {
+    background:rgba(255,255,255,.06);
+    border-color:rgba(255,255,255,.40);
+  }
+  body.light .dl-btn.dl-btn-secondary {
+    background:transparent; color:inherit;
+    border-color:rgba(0,0,0,.20);
+  }
+  body.light .dl-btn.dl-btn-secondary:hover {
+    background:rgba(0,0,0,.04);
+    border-color:rgba(0,0,0,.40);
+  }
+  .mp4-note {
+    font-size:11px; color:#7a7a85; line-height:1.5;
+    margin:-4px 0 0;
+  }
+  body.light .mp4-note { color:#71717a; }
 
   /* Tiny apple-style spinner shown while we capture. inline-block +
      vertical-align so it sits cleanly next to the status text instead
@@ -315,10 +339,12 @@
       <iframe id="pfpFrame" title="dustopia sphere preview"></iframe>
     </div>
     <aside class="pfp-side">
-      <h2>Preview</h2>
-      <p>First-time builds for unseen wallets take 1–3 minutes (we have to fetch every NFT thumbnail and stitch them into an atlas). Once the sphere appears and stops jittering, click Download.</p>
+      <h2>Download</h2>
+      <p>First-time builds for unseen wallets take 1–3 minutes (we have to fetch every NFT thumbnail and stitch them into an atlas). Once the sphere stops jittering, pick a format.</p>
       <div class="status" id="pfpStatus"><span class="spinner" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span> building sphere…</div>
-      <button class="dl-btn" id="dlBtn" type="button" disabled>Download 2000×2000 PNG <span class="arrow">↓</span></button>
+      <button class="dl-btn" id="dlBtn" type="button" disabled>PNG · 2000×2000 <span class="arrow">↓</span></button>
+      <button class="dl-btn dl-btn-secondary" id="dlMp4Btn" type="button" disabled>MP4 · 1080×1080 · 12 s <span class="arrow">↓</span></button>
+      <p class="mp4-note">MP4 is sized for Twitter (≤ 15 MB). PNG is the still avatar.</p>
       <p class="mono" id="addrEcho" style="font-size:11px"></p>
     </aside>
   </section>
@@ -433,6 +459,7 @@
     if (!fr || !fr.contentWindow || !currentAddr) return;
     setStatus('@spin capturing 2000×2000…');
     document.getElementById('dlBtn').disabled = true;
+    document.getElementById('dlMp4Btn').disabled = true;
 
     let timer;
     const onMessage = (e) => {
@@ -443,6 +470,7 @@
       if (e.data.error || !e.data.blob) {
         setStatus('Capture failed: ' + (e.data.error || 'no blob'), 'err');
         document.getElementById('dlBtn').disabled = false;
+        document.getElementById('dlMp4Btn').disabled = false;
         return;
       }
       // Convert blob → object URL → trigger download.
@@ -458,12 +486,14 @@
       setTimeout(() => URL.revokeObjectURL(url), 5000);
       setStatus('Saved.', 'ready');
       document.getElementById('dlBtn').disabled = false;
+      document.getElementById('dlMp4Btn').disabled = false;
     };
     window.addEventListener('message', onMessage);
     timer = setTimeout(() => {
       window.removeEventListener('message', onMessage);
       setStatus('Capture timed out — try again once the sphere stops moving.', 'err');
       document.getElementById('dlBtn').disabled = false;
+      document.getElementById('dlMp4Btn').disabled = false;
     }, 30000);
 
     fr.contentWindow.postMessage(
@@ -473,12 +503,14 @@
   }
 
   // The embed posts `dustopia:built` once the sphere has painted. That's
-  // our cue to enable Download — earlier and the canvas is empty/dark.
+  // our cue to enable both Download buttons — earlier and the canvas
+  // would still be empty/dark.
   window.addEventListener('message', (e) => {
     if (e.origin !== location.origin) return;
     if (!e.data || e.data.type !== 'dustopia:built') return;
     frameReady = true;
     document.getElementById('dlBtn').disabled = false;
+    document.getElementById('dlMp4Btn').disabled = false;
     setStatus('Ready.', 'ready');
   });
 
@@ -495,6 +527,72 @@
   });
 
   document.getElementById('dlBtn').addEventListener('click', downloadPng);
+
+  // MP4 download. Asks the iframe for a 12 s 1080×1080 H.264 recording,
+  // ~7 Mbps to land under Twitter's 15 MB limit (12 × 7 / 8 ≈ 10.5 MB
+  // binary + container overhead). Disables both download buttons during
+  // the record + ticks a countdown in the status line.
+  function downloadMp4() {
+    const fr = document.getElementById('pfpFrame');
+    if (!fr || !fr.contentWindow || !currentAddr) return;
+    const dur = 12_000;
+    const t0 = performance.now();
+    setStatus('@spin recording 0 / ' + (dur / 1000) + ' s…');
+    document.getElementById('dlBtn').disabled = true;
+    document.getElementById('dlMp4Btn').disabled = true;
+
+    // Tick the countdown roughly every second so users see progress.
+    const ticker = setInterval(() => {
+      const elapsed = Math.min(dur, performance.now() - t0);
+      const sec = Math.floor(elapsed / 1000);
+      setStatus('@spin recording ' + sec + ' / ' + (dur / 1000) + ' s…');
+    }, 500);
+
+    let timer;
+    const onMessage = (e) => {
+      if (e.origin !== location.origin) return;
+      if (!e.data || e.data.type !== 'dustopia:mp4-blob') return;
+      window.removeEventListener('message', onMessage);
+      clearInterval(ticker);
+      clearTimeout(timer);
+      if (e.data.error || !e.data.blob) {
+        setStatus('Recording failed: ' + (e.data.error || 'no blob'), 'err');
+        document.getElementById('dlBtn').disabled = false;
+        document.getElementById('dlMp4Btn').disabled = false;
+        return;
+      }
+      const ext = (e.data.mime || '').includes('webm') ? 'webm' : 'mp4';
+      const url = URL.createObjectURL(e.data.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `dustopia-${currentAddr}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      const mb = (e.data.blob.size / (1024 * 1024)).toFixed(1);
+      setStatus(`Saved ${ext.toUpperCase()} (${mb} MB).`, 'ready');
+      document.getElementById('dlBtn').disabled = false;
+      document.getElementById('dlMp4Btn').disabled = false;
+    };
+    window.addEventListener('message', onMessage);
+    // Recording itself is dur ms; bump timeout to dur + 8 s so muxing /
+    // dataavailable finalisation has slack.
+    timer = setTimeout(() => {
+      window.removeEventListener('message', onMessage);
+      clearInterval(ticker);
+      setStatus('Recording timed out.', 'err');
+      document.getElementById('dlBtn').disabled = false;
+      document.getElementById('dlMp4Btn').disabled = false;
+    }, dur + 8_000);
+
+    fr.contentWindow.postMessage(
+      { type: 'dustopia:mp4-capture', size: 1080, duration: dur, bitrate: 7_000_000 },
+      location.origin
+    );
+  }
+
+  document.getElementById('dlMp4Btn').addEventListener('click', downloadMp4);
 
   // /pfp/<addr> path or /pfp#<addr> deep link both auto-load.
   function readAddrFromUrl() {
