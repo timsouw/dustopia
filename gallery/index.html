@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gallery · dustopia</title>
+<meta name="description" content="Every minted Dustopia token, side by side. Each tile is a live sphere of the holder's NFT collection.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dustopia.xyz/gallery">
+<meta property="og:title" content="dustopia · gallery">
+<meta property="og:description" content="Every minted Dustopia, side by side.">
+<meta property="og:image" content="https://api.dustopia.xyz/api/preview/1">
+
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%;
+    background:#14141a; color:#e7e7ea;
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+  }
+  body.light { background:#f4f4f5; color:#18181b; }
+  body { min-height:100vh; }
+  a { color:inherit; text-decoration:none; }
+  ::selection { background:#7262d4; color:#fff; }
+  body.light ::selection { background:#18181b; color:#fafafa; }
+
+  .mono { font-family:"SF Mono","Menlo",ui-monospace,monospace; font-size:.86em; letter-spacing:.02em; }
+  .label {
+    display:inline-block;
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:10px; letter-spacing:.18em; text-transform:uppercase;
+    color:#7a7a85;
+  }
+  body.light .label { color:#71717a; }
+
+  /* Header — matches landing/holder/play */
+  header {
+    position:sticky; top:0; z-index:50;
+    background:rgba(20,20,26,.72);
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  body.light header { background:rgba(244,244,245,.78); border-bottom-color:rgba(0,0,0,.06); }
+  header .bar {
+    display:flex; align-items:center; justify-content:space-between;
+    height:54px; max-width:1240px; margin:0 auto; padding:0 24px;
+  }
+  .brand { display:flex; align-items:center; gap:10px; font-size:14px; font-weight:600; letter-spacing:-0.01em; }
+  .brand-mark {
+    width:18px; height:18px; border-radius:50%;
+    background:radial-gradient(38% 32% at 38% 32%, #ffffff 0%, #d8d2ff 30%, #7262d4 60%, #120a2a 100%);
+  }
+  .nav-links { display:flex; align-items:center; gap:6px; }
+  .nav-link {
+    padding:6px 12px; border-radius:6px;
+    font-size:12px; letter-spacing:.02em; color:#9a9aa5;
+    transition:color 120ms, background 120ms;
+  }
+  .nav-link:hover { color:#e7e7ea; background:rgba(255,255,255,.05); }
+  body.light .nav-link { color:#71717a; }
+  body.light .nav-link:hover { color:#18181b; background:rgba(0,0,0,.04); }
+  .nav-link.current { color:#e7e7ea; background:rgba(255,255,255,.06); }
+  body.light .nav-link.current { color:#18181b; background:rgba(0,0,0,.05); }
+  .icon-btn {
+    background:transparent; border:1px solid rgba(255,255,255,.14);
+    color:inherit; cursor:pointer;
+    width:30px; height:30px; border-radius:7px;
+    display:inline-flex; align-items:center; justify-content:center;
+    margin-left:6px;
+  }
+  .icon-btn:hover { border-color:rgba(255,255,255,.4); }
+  body.light .icon-btn { border-color:rgba(0,0,0,.14); }
+  body.light .icon-btn:hover { border-color:rgba(0,0,0,.4); }
+  .icon-btn svg { width:14px; height:14px; }
+
+  /* Page body */
+  .wrap { width:100%; max-width:1240px; margin:0 auto; padding:36px 24px 64px; }
+
+  .gallery-head {
+    display:flex; flex-direction:column; gap:8px;
+    margin-bottom:32px;
+    padding-bottom:24px;
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  body.light .gallery-head { border-bottom-color:rgba(0,0,0,.08); }
+  .gallery-head h1 {
+    font-size:32px; font-weight:600; letter-spacing:-0.02em; line-height:1.1;
+  }
+  .gallery-head p {
+    font-size:14px; line-height:1.55; color:#9a9aa5; max-width:60ch;
+  }
+  body.light .gallery-head p { color:#52525b; }
+  .gallery-head .stats {
+    display:flex; gap:24px; flex-wrap:wrap;
+    margin-top:6px;
+    font-size:12px; color:#9a9aa5;
+  }
+  body.light .gallery-head .stats { color:#52525b; }
+  .gallery-head .stats b { color:#e7e7ea; font-weight:600; }
+  body.light .gallery-head .stats b { color:#18181b; }
+
+  /* Grid of token cards */
+  .token-grid {
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
+    gap:16px;
+  }
+  .token-card {
+    display:flex; flex-direction:column;
+    background:rgba(255,255,255,.025);
+    border:1px solid rgba(255,255,255,.06);
+    border-radius:12px;
+    overflow:hidden;
+    transition:border-color 200ms, transform 200ms;
+  }
+  .token-card:hover { border-color:rgba(255,255,255,.18); transform:translateY(-2px); }
+  body.light .token-card { background:rgba(0,0,0,.02); border-color:rgba(0,0,0,.06); }
+  body.light .token-card:hover { border-color:rgba(0,0,0,.18); }
+  .token-img-wrap {
+    position:relative;
+    aspect-ratio:1 / 1;
+    background:#14141a;
+    overflow:hidden;
+  }
+  body.light .token-img-wrap { background:#e9e9ec; }
+  .token-img-wrap img {
+    width:100%; height:100%; object-fit:cover; display:block;
+  }
+  .token-meta {
+    padding:14px 14px 14px;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .token-name {
+    font-size:13.5px; font-weight:600; letter-spacing:-0.005em;
+  }
+  .token-row {
+    display:flex; align-items:center; justify-content:space-between;
+    gap:8px;
+  }
+  .token-owner {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:11px; color:#9a9aa5;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    max-width:60%;
+  }
+  body.light .token-owner { color:#71717a; }
+  .token-owner:hover { color:#e7e7ea; }
+  body.light .token-owner:hover { color:#18181b; }
+  .token-stat {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:10.5px; color:#7a7a85;
+  }
+  body.light .token-stat { color:#71717a; }
+
+  .empty-state, .error-state {
+    padding:60px 24px;
+    text-align:center;
+    border:1px dashed rgba(255,255,255,.08);
+    border-radius:12px;
+    color:#9a9aa5;
+    font-size:14px; line-height:1.55;
+  }
+  body.light .empty-state, body.light .error-state {
+    border-color:rgba(0,0,0,.08); color:#52525b;
+  }
+  .empty-state .cta {
+    display:inline-block;
+    margin-top:14px;
+    padding:9px 16px; border-radius:8px;
+    background:#e7e7ea; color:#101217;
+    font-size:12.5px; font-weight:600;
+  }
+  body.light .empty-state .cta { background:#18181b; color:#fafafa; }
+
+  /* Skeleton loader */
+  .skeleton-grid {
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
+    gap:16px;
+  }
+  .skeleton-card {
+    aspect-ratio:1 / 1;
+    border-radius:12px;
+    background:linear-gradient(90deg,
+      rgba(255,255,255,.03) 0%,
+      rgba(255,255,255,.06) 50%,
+      rgba(255,255,255,.03) 100%);
+    background-size:200% 100%;
+    animation:skel 1.4s ease-in-out infinite;
+  }
+  body.light .skeleton-card {
+    background:linear-gradient(90deg,
+      rgba(0,0,0,.03) 0%, rgba(0,0,0,.06) 50%, rgba(0,0,0,.03) 100%);
+    background-size:200% 100%;
+  }
+  @keyframes skel {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+</style>
+</head>
+<body class="light">
+
+<header>
+  <div class="bar">
+    <a href="/" class="brand" aria-label="dustopia home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>dustopia</span>
+    </a>
+    <nav class="nav-links" aria-label="primary">
+      <a href="/#how" class="nav-link">how it works</a>
+      <a href="/gallery" class="nav-link current">gallery</a>
+      <a href="/play" class="nav-link">play</a>
+      <a href="/configure" class="nav-link">configure</a>
+      <button id="themeBtn" class="icon-btn" type="button" aria-label="toggle theme" title="toggle theme">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="gallery-head">
+    <span class="label">gallery</span>
+    <h1>Every minted Dustopia.</h1>
+    <p>One tile per token. Each preview animates the live sphere of its holder's wallet. Click into a tile to drag, zoom and explore.</p>
+    <div class="stats" id="galleryStats" hidden></div>
+  </section>
+
+  <section id="grid"></section>
+</main>
+
+<script>
+  window.safeStorage = (function() {
+    let mem = {};
+    try {
+      const k = '__t';
+      localStorage.setItem(k, k); localStorage.removeItem(k);
+      return {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+      };
+    } catch {
+      return { get: (k) => mem[k] ?? null, set: (k, v) => { mem[k] = v; } };
+    }
+  })();
+  (function() {
+    const saved = safeStorage.get('franken-theme');
+    if (saved === 'dark') document.body.classList.remove('light');
+    else                  document.body.classList.add('light');
+  })();
+</script>
+
+<script>
+  const moon = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>';
+  const sun  = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 0v3M8 13v3M0 8h3M13 8h3M2.3 2.3l2.1 2.1M11.6 11.6l2.1 2.1M2.3 13.7l2.1-2.1M11.6 4.4l2.1-2.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  (function() {
+    const btn = document.getElementById('themeBtn');
+    function syncIcon() { btn.innerHTML = document.body.classList.contains('light') ? moon : sun; }
+    syncIcon();
+    btn.addEventListener('click', () => {
+      const isLight = document.body.classList.toggle('light');
+      safeStorage.set('franken-theme', isLight ? 'light' : 'dark');
+      syncIcon();
+    });
+  })();
+
+  const API_URL = 'https://api.dustopia.xyz';
+
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+    ));
+  }
+  function shortAddr(a) { return `${a.slice(0,6)}…${a.slice(-4)}`; }
+
+  function renderSkeletons(n = 8) {
+    const cards = Array.from({ length: n }).map(() =>
+      `<div class="skeleton-card"></div>`
+    ).join('');
+    document.getElementById('grid').innerHTML = `
+      <div class="skeleton-grid">${cards}</div>`;
+  }
+
+  function renderEmpty() {
+    document.getElementById('grid').innerHTML = `
+      <div class="empty-state">
+        No Dustopias have been minted yet.<br>
+        <a href="/play" class="cta">Try the playground →</a>
+      </div>`;
+  }
+
+  function renderError(msg) {
+    document.getElementById('grid').innerHTML =
+      `<div class="error-state">${escHtml(msg)}</div>`;
+  }
+
+  // Card per token. Tile click navigates to /embed/<owner>?token=<id>;
+  // owner short-link inside the meta row navigates to /holder/<owner>
+  // — but we need to prevent the inner click bubbling to the outer
+  // anchor (otherwise the outer wins). data-stop on the inner anchor
+  // handles that.
+  function renderTokens(tokens) {
+    if (!tokens.length) { renderEmpty(); return; }
+    const cards = tokens.map((t) => {
+      const stat = (t.tokens != null && t.collections != null)
+        ? `<span class="token-stat">${t.tokens}t · ${t.collections}c</span>`
+        : `<span class="token-stat">—</span>`;
+      return `
+        <a href="/embed/${encodeURIComponent(t.owner)}?token=${escHtml(t.tokenId)}"
+           class="token-card"
+           title="Open Dustopia #${escHtml(t.tokenId)}">
+          <div class="token-img-wrap">
+            <img src="${API_URL}/api/preview/${escHtml(t.tokenId)}"
+                 alt="Dustopia #${escHtml(t.tokenId)}"
+                 loading="lazy" decoding="async">
+          </div>
+          <div class="token-meta">
+            <span class="token-name">Dustopia #${escHtml(t.tokenId)}</span>
+            <div class="token-row">
+              <a class="token-owner" href="/holder/${encodeURIComponent(t.owner)}"
+                 onclick="event.stopPropagation()" title="${escHtml(t.owner)}">
+                ${escHtml(shortAddr(t.owner))}
+              </a>
+              ${stat}
+            </div>
+          </div>
+        </a>`;
+    }).join('');
+    document.getElementById('grid').innerHTML = `
+      <div class="token-grid">${cards}</div>`;
+  }
+
+  async function init() {
+    renderSkeletons(8);
+    let data;
+    try {
+      const r = await fetch(`${API_URL}/api/all-tokens`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      data = await r.json();
+    } catch (e) {
+      renderError(`Couldn't load gallery: ${e.message}`);
+      return;
+    }
+    const tokens = Array.isArray(data.tokens) ? data.tokens : [];
+    // Most recent mints first (highest tokenId at the top).
+    tokens.sort((a, b) => Number(b.tokenId) - Number(a.tokenId));
+
+    const stats = document.getElementById('galleryStats');
+    stats.hidden = false;
+    const uniqueOwners = new Set(tokens.map(t => t.owner)).size;
+    stats.innerHTML = `
+      <span><b>${data.totalSupply ?? tokens.length}</b> minted</span>
+      <span><b>${uniqueOwners}</b> ${uniqueOwners === 1 ? 'holder' : 'holders'}</span>`;
+
+    renderTokens(tokens);
+  }
+
+  init();
+</script>
+
+</body>
+</html>
