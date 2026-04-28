@@ -175,16 +175,24 @@
   }
   body.light .form-error { color:#b91c1c; }
 
-  /* Stage panel = round preview + status + download button */
+  /* Stage panel = round preview + status + download buttons. On desktop
+     we centre a fixed-width preview next to a fixed-width sidebar so the
+     page doesn't blow the round frame up to 600 px when there's nothing
+     useful to fill the leftover whitespace. Mobile collapses to a single
+     centred column. */
   .pfp-stage {
     margin-top:24px;
     display:grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    gap:24px;
+    grid-template-columns: minmax(0, 360px) 280px;
+    gap:32px;
     align-items:start;
+    justify-content:center;
   }
   @media (max-width: 760px) {
-    .pfp-stage { grid-template-columns: 1fr; }
+    .pfp-stage {
+      grid-template-columns: minmax(0, 360px);
+      justify-content:center;
+    }
   }
 
   .pfp-frame {
