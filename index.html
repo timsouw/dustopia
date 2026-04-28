@@ -174,10 +174,13 @@
     box-shadow: 0 1px 0 rgba(0,0,0,.04) inset,
                 0 24px 48px -16px rgba(0,0,0,.18);
   }
-  .hero-image img {
+  .hero-image iframe {
     width:100%; height:100%;
-    object-fit:cover;
-    display:block;
+    border:0; display:block;
+    /* The embed page paints its own background based on the active
+       theme; the hero-image background colour above only flashes for a
+       moment before the iframe takes over. */
+    background:transparent;
   }
   /* Soft pulse on the preview corner — pure decoration, signals "alive". */
   .hero-image::after {
@@ -379,17 +382,18 @@
 <section class="hero">
   <div class="wrap">
     <div class="hero-grid">
-      <!-- Static snapshot of the deploy wallet's sphere. Single image
-           request, decoded once — vs. ~700 MB GPU/heap for a live
-           iframe. /api/preview/1 falls back to the animated SVG when
-           the PNG capture isn't in R2 yet. -->
-      <a class="hero-image" href="/embed/0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf"
-         title="Open the live sphere">
-        <img src="https://api.dustopia.xyz/api/preview/1"
-             alt="Dustopia sphere preview, wallet rendered as swirling NFT particles"
-             loading="eager" decoding="async"
-             width="1200" height="1200">
-      </a>
+      <!-- Live sphere of the deploy wallet. ?landing=1 disables
+           preview-cap upload (the loop snapshots looked bad and were
+           polluting R2 every visit) and lets atlas caching do the heavy
+           lifting: first visitor builds, every subsequent visit pulls
+           the binary from R2 in a single GET and renders instantly. -->
+      <div class="hero-image">
+        <iframe
+          src="/embed/0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf?landing=1"
+          title="Live dustopia sphere of the deploy wallet"
+          loading="eager"
+          referrerpolicy="same-origin"></iframe>
+      </div>
       <div class="hero-content">
         <h1>dustopia</h1>
         <p class="tagline">your wallet, in motion.</p>

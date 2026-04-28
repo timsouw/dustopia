@@ -206,6 +206,11 @@
     // wallets people paste in don't pollute the R2 atlas / preview-cap
     // caches. Atlas upload + preview capture both gated on this below.
     if (params.get('nocache') === '1') window.__dustopiaNocache = true;
+    // Landing-hero mode: dustopia.xyz frames the deploy wallet's sphere as
+    // the live hero. We disable preview-cap upload (the landing
+    // shouldn't keep re-capturing what a real /embed visit will), but
+    // atlas upload stays on so subsequent hero loads hit the R2 cache.
+    if (params.get('landing') === '1') window.__dustopiaLanding = true;
     const selRaw = params.get('sel');
     if (selRaw) {
       try {
@@ -1301,7 +1306,7 @@ async function main() {
   // if R2 already has a capture for this wallet (HEAD check inside) and
   // skipped entirely in editor preview mode so drafts don't overwrite
   // the canonical OpenSea grid image.
-  if (!window.__dustopiaPreview && !window.__dustopiaNocache) {
+  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaLanding) {
     setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, PREVIEW_DELAY_MS);
   }
 
