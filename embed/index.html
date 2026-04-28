@@ -719,6 +719,112 @@ async function buildAtlasAuto(pairs) {
   return buildAtlasBinary(pairs);
 }
 
+// =====================================================================
+// PROGRESSIVE ATLAS — instead of awaiting every NFT thumbnail before
+// the first paint, allocate a grey-filled skeleton atlas immediately so
+// the GL setup + render loop can start within a few seconds. As each
+// image lands we draw it onto the skeleton canvas and emit a
+// per-tile RGB byte buffer so the caller can `gl.texSubImage2D` only
+// that region of the GPU texture. Sphere visibly fills with real
+// thumbnails as they arrive.
+// =====================================================================
+
+// Placeholder grey for skeleton tiles. Picked to read against both light
+// and dark themes — close to neutral mid-grey so the depth-fog tint
+// that the shader applies still leaves the dot visible.
+const ATLAS_SKELETON_GREY = 0x36;
+
+function allocSkeletonAtlas(N) {
+  const tileSize  = LIVE_TILE;
+  const TPR       = ATLAS_TILES_ROW;
+  const atlasRows = Math.max(1, Math.ceil(N / TPR));
+  const atlasW    = TPR * tileSize;
+  const atlasH    = atlasRows * tileSize;
+
+  // RGB byte buffer for the initial GL upload.
+  const atlasData = new Uint8Array(atlasW * atlasH * 3);
+  atlasData.fill(ATLAS_SKELETON_GREY);
+
+  // Persistent canvas. Each landed thumbnail is drawn at its slot via
+  // ctx.drawImage; we both extract a tile-region RGB buffer for live GL
+  // updates AND keep the canvas around so finalize() can encode the
+  // whole thing as WebP for R2 upload at the end.
+  const canvas = document.createElement('canvas');
+  canvas.width  = atlasW;
+  canvas.height = atlasH;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  // Match the byte fill so any region the canvas hasn't been drawn into
+  // yet still reads as the same grey when we (later) re-extract it.
+  const grey = `rgb(${ATLAS_SKELETON_GREY},${ATLAS_SKELETON_GREY},${ATLAS_SKELETON_GREY})`;
+  ctx.fillStyle = grey;
+  ctx.fillRect(0, 0, atlasW, atlasH);
+
+  return { atlasData, atlasW, atlasH, canvas, ctx };
+}
+
+// Drain `used` (NFT candidates with image URL lists) in parallel
+// workers. Each landed image is drawn into `skeleton.canvas` at its
+// slot and its 192×192 region is converted to RGB bytes for the
+// caller (typically gl.texSubImage2D for live texture replacement).
+// Resolves with the WebP-encoded full atlas blob for R2 upload.
+async function growAtlasFrom(used, skeleton, opts) {
+  const { onSlotReady, onProgress } = opts || {};
+  const tileSize = LIVE_TILE;
+  const TPR      = ATLAS_TILES_ROW;
+  const ctx      = skeleton.ctx;
+  const N        = used.length;
+  const concurrency = Math.max(1, FETCH_CONC);
+
+  // Reusable RGB scratch buffer — sized for one tile; one per worker so
+  // workers don't trample each other while the slot's draw + extract
+  // runs.
+  const scratchPool = Array.from({ length: concurrency },
+    () => new Uint8Array(tileSize * tileSize * 3));
+
+  let next = 0, done = 0, failed = 0;
+
+  async function worker(idx) {
+    const scratch = scratchPool[idx];
+    while (true) {
+      const i = next++;
+      if (i >= N) return;
+      const image = await loadImageWithFallback(used[i].urls, FETCH_TIMEOUT);
+      if (image) {
+        const tx = (i % TPR) * tileSize;
+        const ty = ((i / TPR) | 0) * tileSize;
+        try {
+          ctx.drawImage(image, tx, ty, tileSize, tileSize);
+          const rgba = ctx.getImageData(tx, ty, tileSize, tileSize).data;
+          // RGBA → RGB packed in-place into the scratch buffer. The
+          // shader samples atlas as RGB8 so alpha is dropped.
+          for (let p = 0, q = 0; p < rgba.length; p += 4, q += 3) {
+            scratch[q]   = rgba[p];
+            scratch[q+1] = rgba[p+1];
+            scratch[q+2] = rgba[p+2];
+          }
+          if (onSlotReady) onSlotReady(i, tx, ty, tileSize, scratch);
+        } catch (e) {
+          dwarn('[progressive] tile draw failed', i, e);
+          failed++;
+        }
+      } else {
+        failed++;
+      }
+      done++;
+      if (onProgress) onProgress(done, N, failed);
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, (_, idx) => worker(idx)));
+
+  // Encode the whole canvas as WebP for the R2 upload path. This is
+  // expensive (~1-3 s for a 6000² atlas) but it's now off the
+  // first-paint critical path entirely — it runs after the sphere is
+  // already showing real thumbnails.
+  const atlasBlob = await new Promise((res) => skeleton.canvas.toBlob(res, 'image/webp', ATLAS_WEBP_QUALITY));
+  return { atlasBlob, failed };
+}
+
 // Decode a stored atlas image (WebP/PNG) into the 2D RGB pixel data the
 // renderer hands to texImage2D. Symmetric inverse of the build path.
 async function decodeAtlasImage(blob) {
@@ -1376,32 +1482,38 @@ async function buildLiveData(input) {
     console.warn(`wallet has ${candidates.length} NFTs; rendering first ${MAX_TOKENS}`);
   }
   const used = candidates.slice(0, MAX_TOKENS);
+
+  // Progressive build: instead of awaiting every thumbnail before the
+  // first paint, allocate a grey-filled skeleton atlas right now and
+  // hand it back so GL setup + render-loop can start within ~1 s of
+  // the wallet metadata coming in. Images then stream in via the
+  // returned grow() function which texSubImages each tile into the
+  // GPU texture as it lands. Caller (main()) wires that up and kicks
+  // off the upload once the canvas is fully populated.
+  const skeleton = allocSkeletonAtlas(used.length);
+  // Meta is derived from the NFT list (collection + tokenId), not the
+  // image data, so we can build it now and reuse the same object for
+  // both render and the eventual R2 upload.
+  const meta = buildAtlasMeta(used.map((c) => ({ nft: c.nft })));
   setStatus(`<span>fetching ${used.length} images…</span>`);
   setProgress(0, true);
-  const imgs = await fetchImagesParallelLive(
-    used.map(c => c.urls), FETCH_CONC,
-    (d, t) => {
-      setStatus(`<span>fetching images · ${d} / ${t}</span>`);
-      setProgress(d / Math.max(1, t), true);
-    },
-  );
-  setProgress(0, false);
-  // Pair only tokens with successfully loaded images
-  const pairs = [];
-  for (let i = 0; i < used.length; i++) {
-    if (imgs[i]) pairs.push({ nft: used[i].nft, image: imgs[i] });
-  }
-  if (!pairs.length) throw new Error('all image fetches failed (CORS?)');
-  const failed = used.length - pairs.length;
-  setStatus(`<span>building atlas (${pairs.length} tokens)…</span>`);
-  const { meta, atlasData, atlasW, atlasH, atlasBlob } = await buildAtlasAuto(pairs);
-  // Fire-and-forget: persist this atlas to R2 so the next visit (or every
-  // OpenSea iframe load on this NFT) hits the cache path above. Awaited
-  // upload would block first paint by ~5-30s for large wallets — not worth
-  // it. Failures are logged and otherwise ignored. Skipped in preview mode
-  // so editor drafts don't pollute the public cache.
-  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaPfp) uploadAtlas(addr, meta, atlasBlob, fp);
-  return { meta, atlasData, atlasW, atlasH, walletAddr: addr, originalInput: original, isEns, failed, totalRequested: used.length, fromCache: false, selection, fp };
+
+  return {
+    meta,
+    atlasData:      skeleton.atlasData,
+    atlasW:         skeleton.atlasW,
+    atlasH:         skeleton.atlasH,
+    walletAddr:     addr,
+    originalInput:  original,
+    isEns,
+    failed:         0,                // updated on grow() resolve
+    totalRequested: used.length,
+    fromCache:      false,
+    selection,
+    fp,
+    progressive:    true,
+    grow:           (handlers) => growAtlasFrom(used, skeleton, handlers),
+  };
 }
 
 function waitForLoadAndBuild() {
@@ -2204,7 +2316,11 @@ async function main() {
   // sphere has rendered for the first time. Toggled true at the end of
   // the first frame() call so the "updating preview…" badge clears at
   // the right moment instead of when the iframe DOM finishes loading.
+  // For the progressive path the first frame is a grey skeleton; we
+  // suppress the signal on first paint there and fire it from the
+  // grow().then() handler instead, once real thumbnails are in place.
   let firstPaintSent = false;
+  const deferBuiltSignal = built.progressive === true;
 
   function frame(now) {
     // dt clamped so that long tab-backgrounding doesn't produce a huge physics jump
@@ -2465,10 +2581,11 @@ async function main() {
     }
 
     // First-paint signal for the editor preview iframe. /configure
-    // listens for this and clears its "updating preview…" badge once the
-    // sphere has actually rendered (the iframe `load` event fires too
-    // early — atlas build adds another 5-10s before the first frame).
-    if (!firstPaintSent) {
+    // listens for this and clears its "updating preview…" badge once
+    // the sphere has actually rendered. Skipped on the progressive
+    // path — there the first paint is a grey skeleton, the signal
+    // fires from grow().then() once real thumbnails are in place.
+    if (!firstPaintSent && !deferBuiltSignal) {
       firstPaintSent = true;
       try {
         if (window.parent && window.parent !== window) {
@@ -2480,6 +2597,64 @@ async function main() {
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
+  // ── Progressive atlas fill ─────────────────────────────────────
+  // The build returned a grey-skeleton atlas synchronously and the
+  // render loop is now running with that. Stream real thumbnails into
+  // the GPU texture in the background — each landed image fires a
+  // gl.texSubImage2D into its slot, and the next frame() call shows
+  // it. Sphere visibly fills with real NFTs as they arrive instead of
+  // the user staring at a grey ball or, worse, an empty page.
+  //
+  // Skipped on the cache hit path (built.progressive is undefined
+  // there — the atlas was already complete in R2).
+  if (built.progressive && typeof built.grow === 'function') {
+    built.grow({
+      onSlotReady: (slot, tx, ty, tileSize, rgbBytes) => {
+        gl.bindTexture(gl.TEXTURE_2D, atlasTex);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texSubImage2D(
+          gl.TEXTURE_2D, 0,
+          tx, ty, tileSize, tileSize,
+          gl.RGB, gl.UNSIGNED_BYTE, rgbBytes,
+        );
+      },
+      onProgress: (done, total) => {
+        setProgress(done / Math.max(1, total), true);
+        setStatus(`<span>filling sphere · ${done} / ${total}</span>`);
+      },
+    }).then(({ atlasBlob, failed }) => {
+      setProgress(0, false);
+      const ok = built.totalRequested - (failed || 0);
+      setStatus(`<span class="ok">✓ ${ok} tokens</span>`);
+      // Now that the atlas is fully populated with real thumbnails,
+      // notify any embedding parent (the /configure preview iframe,
+      // /pfp page, /play playground). They've been waiting for this
+      // signal to enable Download buttons / clear "updating" badges /
+      // gate MP4 capture etc. We still gate to once-per-page so the
+      // post is idempotent if grow() somehow resolves twice.
+      if (!firstPaintSent) {
+        firstPaintSent = true;
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'dustopia:built' }, location.origin);
+          }
+        } catch { /* cross-origin parent or sandbox — silently ignore */ }
+      }
+      // Persist the now-complete atlas to R2 so the next visit hits
+      // the cache path. Same skip rules as before — preview / nocache /
+      // pfp drafts shouldn't pollute the public cache.
+      if (atlasBlob
+          && !window.__dustopiaPreview
+          && !window.__dustopiaNocache
+          && !window.__dustopiaPfp) {
+        uploadAtlas(liveWalletAddr, built.meta, atlasBlob, built.fp);
+      }
+    }).catch((e) => {
+      dwarn('progressive grow failed', e);
+      setProgress(0, false);
+    });
+  }
 }
 
 // Top-level crash guard: surface errors instead of silently dying after first await.
