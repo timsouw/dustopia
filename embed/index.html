@@ -284,8 +284,8 @@ const IS_MOBILE = (typeof matchMedia !== 'undefined' && matchMedia('(pointer: co
 // ~32× in memory at the values below — measured ~600 MB → tens of MB.
 const LANDING_MODE = (typeof window !== 'undefined') && window.__dustopiaLanding === true;
 
-const GRID             = LANDING_MODE ? 96 : (IS_MOBILE ? 128 : 192);  // 192² = 36864 particles per image; mobile 128² = 16384; landing 96² = 9216
-const HISTORY_LEN      = LANDING_MODE ? 200 : (IS_MOBILE ? 256 : 320); // ≥ GRID + GRID·SHEAR_FACTOR
+const GRID             = LANDING_MODE ? 128 : (IS_MOBILE ? 128 : 192);  // 192² = 36864 particles per image; mobile 128² = 16384; landing 128² (was 96²) for crisper hero
+const HISTORY_LEN      = LANDING_MODE ? 256 : (IS_MOBILE ? 256 : 320); // ≥ GRID + GRID·SHEAR_FACTOR
 const LANE_WIDTH       = 0.32 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical across GRID changes)
 const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
 // Calm-portrait default. Earlier passes had a heavy windswept look
@@ -405,7 +405,7 @@ const ALCH_MAX_PAG = 60;
 const LIVE_TILE    = GRID;           // matches GRID — desktop 192×192, mobile 128×128 (atlas size scales with GRID²)
 const FETCH_CONC   = 12;
 const FETCH_TIMEOUT= 12000;
-const MAX_TOKENS   = LANDING_MODE ? 128 : 1024;   // safety ceiling for live render perf; landing trims to 128 to keep iframe memory tiny
+const MAX_TOKENS   = LANDING_MODE ? 256 : 1024;   // safety ceiling for live render perf; landing trims for hero memory
 
 const statusEl = () => document.getElementById('status');
 function setStatus(html) {
@@ -1547,14 +1547,17 @@ async function main() {
   // canvas's shorter side and let the GL code render normally; the
   // capture handler crops/scales from there. Memory cost is bounded
   // because pfp mode is a brief one-off.
-  // Landing mode (memory-tight hero iframe) drops DPR to 1.
-  // Default: respect device DPR up to 2 (1.5 on mobile).
+  // Landing mode (memory-tight hero iframe) caps DPR at 1.5 — enough
+  // to keep ribbons sharp, low enough that a tab-sized hero stays
+  // under a hundred MB on mobile.
+  // Default live render: respect device DPR up to 2 on both desktop
+  // and mobile.
   const _shorterSide = Math.max(1, Math.min(window.innerWidth, window.innerHeight));
   let DPR = window.__dustopiaPfp
     ? Math.min(8, Math.max(2, Math.ceil(2400 / _shorterSide)))
     : LANDING_MODE
-      ? 1
-      : Math.min(window.devicePixelRatio || 1, IS_MOBILE ? 1.5 : 2);
+      ? 1.5
+      : Math.min(window.devicePixelRatio || 1, 2);
   let W = 0, H = 0;
   function resize() {
     W = window.innerWidth; H = window.innerHeight;
