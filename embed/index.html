@@ -288,15 +288,20 @@ const GRID             = LANDING_MODE ? 96 : (IS_MOBILE ? 128 : 192);  // 192² 
 const HISTORY_LEN      = LANDING_MODE ? 200 : (IS_MOBILE ? 256 : 320); // ≥ GRID + GRID·SHEAR_FACTOR
 const LANE_WIDTH       = 0.32 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical across GRID changes)
 const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
-// PFP capture lives or dies on the still-frame look. The shear /
-// wave / wind effects make the live render feel windswept, but on a
-// single frame they read as motion-blur smearing. Zero them out in
-// pfp mode so the sphere captures as a clean ball.
+// PFP capture lives or dies on the still-frame look. The shear / wave /
+// wind effects make the live render feel windswept, but on a single
+// frame they read as motion-blur smearing. Zero them out in pfp mode so
+// the sphere captures as a clean ball.
+//
+// The default values below were tuned down from a fully windswept look
+// (SHEAR 0.55, WIND 0.014/0.004) to make individual NFT thumbnails
+// readable as distinct ribbons in the live render too — the colour
+// bands now keep their identity instead of smearing into each other.
 const _PFP = (typeof window !== 'undefined') && window.__dustopiaPfp === true;
-const SHEAR_FACTOR     = _PFP ? 0     : 0.55;    // more skew for windswept look
+const SHEAR_FACTOR     = _PFP ? 0     : 0.15;    // was 0.55 — now ribbons stay readable
 const WAVE_AMPLITUDE   = _PFP ? 0.005 : 0.033;   // tiny wave keeps the surface from looking too perfect
-const WIND_AMP_LOW     = _PFP ? 0     : 0.014;   // per-pixel spatial wind displacement (low-freq, image-coherent)
-const WIND_AMP_HIGH    = _PFP ? 0     : 0.004;   // per-pixel wispy jitter (high-freq)
+const WIND_AMP_LOW     = _PFP ? 0     : 0.004;   // was 0.014 — light breeze, not a gale
+const WIND_AMP_HIGH    = _PFP ? 0     : 0.001;   // was 0.004 — minimal wispy jitter
 
 // --- school-of-fish flocking ---
 const FLOCK_ALIGN      = 0.55;    // weight: pull forward toward collection's average heading
