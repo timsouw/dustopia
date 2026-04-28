@@ -51,9 +51,15 @@ const ALCH_TIMEOUT_MS = 12000;
 //
 // Two buckets: GENERAL for read-heavy endpoints, PUT for write endpoints
 // (atlas, preview-cap, config). PUT is much tighter because every entry
-// touches R2 storage — abuse there has a real $ cost, while abuse of
-// reads only burns Worker CPU which Cloudflare already free-tier-caps.
-const RATE_LIMIT_PER_MIN     = 60;
+// touches R2 storage.
+//
+// GENERAL bucket also gates Alchemy-backed routes (wallet, owned,
+// metadata). Because each /api/wallet hit can fan out to 1-15 paginated
+// Alchemy calls, sustained abuse from a single IP scales to real $ on
+// the Pay-As-You-Go plan. We tightened from 60 → 20 req/min: nobody
+// legitimately needs more than one wallet load every three seconds, and
+// the 6h KV cache means repeats on the same wallet cost zero anyway.
+const RATE_LIMIT_PER_MIN     = 20;
 const RATE_LIMIT_PUT_PER_MIN = 10;
 
 async function rateLimitOk(request, env, bucket = 'general') {
