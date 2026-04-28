@@ -407,11 +407,12 @@
     document.getElementById('dlBtn').disabled = true;
     setStatus('@spin building sphere…');
 
-    // landing=1 keeps the renderer light on memory; pfp=1 forces white
-    // background + light theme + uploads-off and registers the capture
-    // postMessage handler in the iframe.
+    // pfp=1 forces white background, light theme, no uploads, AND a high
+    // canvas DPR so the captured PNG is sharp. We deliberately do NOT
+    // pass landing=1 here — landing's DPR=1 cap would make mobile
+    // captures pixelated.
     const fr = document.getElementById('pfpFrame');
-    fr.src = `/embed/${encodeURIComponent(addr)}?pfp=1&landing=1&t=${Date.now()}`;
+    fr.src = `/embed/${encodeURIComponent(addr)}?pfp=1&t=${Date.now()}`;
 
     // Update URL hash for shareability — `/pfp#vitalik.eth` deep-links.
     if (location.hash !== '#' + addr) {

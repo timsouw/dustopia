@@ -288,10 +288,15 @@ const GRID             = LANDING_MODE ? 96 : (IS_MOBILE ? 128 : 192);  // 192² 
 const HISTORY_LEN      = LANDING_MODE ? 200 : (IS_MOBILE ? 256 : 320); // ≥ GRID + GRID·SHEAR_FACTOR
 const LANE_WIDTH       = 0.32 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical across GRID changes)
 const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
-const SHEAR_FACTOR     = 0.55;    // more skew for windswept look
-const WAVE_AMPLITUDE   = 0.033;  // +50% from 0.022
-const WIND_AMP_LOW     = 0.014;   // per-pixel spatial wind displacement (low-freq, image-coherent)
-const WIND_AMP_HIGH    = 0.004;   // per-pixel wispy jitter (high-freq)
+// PFP capture lives or dies on the still-frame look. The shear /
+// wave / wind effects make the live render feel windswept, but on a
+// single frame they read as motion-blur smearing. Zero them out in
+// pfp mode so the sphere captures as a clean ball.
+const _PFP = (typeof window !== 'undefined') && window.__dustopiaPfp === true;
+const SHEAR_FACTOR     = _PFP ? 0     : 0.55;    // more skew for windswept look
+const WAVE_AMPLITUDE   = _PFP ? 0.005 : 0.033;   // tiny wave keeps the surface from looking too perfect
+const WIND_AMP_LOW     = _PFP ? 0     : 0.014;   // per-pixel spatial wind displacement (low-freq, image-coherent)
+const WIND_AMP_HIGH    = _PFP ? 0     : 0.004;   // per-pixel wispy jitter (high-freq)
 
 // --- school-of-fish flocking ---
 const FLOCK_ALIGN      = 0.55;    // weight: pull forward toward collection's average heading
@@ -1429,12 +1434,19 @@ async function main() {
     return;
   }
 
-  // Landing mode renders into a ~600 px iframe and doesn't need crisp
-  // sub-pixel detail; clamping DPR to 1 cuts fragment-shader workload
-  // ~4× on retina displays.
-  let DPR = LANDING_MODE
-    ? 1
-    : Math.min(window.devicePixelRatio || 1, IS_MOBILE ? 1.5 : 2);
+  // PFP capture needs a backbuffer big enough that drawing it into the
+  // 2000×2000 PNG isn't a blurry upscale. We target ≥2400 px on the
+  // canvas's shorter side and let the GL code render normally; the
+  // capture handler crops/scales from there. Memory cost is bounded
+  // because pfp mode is a brief one-off.
+  // Landing mode (memory-tight hero iframe) drops DPR to 1.
+  // Default: respect device DPR up to 2 (1.5 on mobile).
+  const _shorterSide = Math.max(1, Math.min(window.innerWidth, window.innerHeight));
+  let DPR = window.__dustopiaPfp
+    ? Math.min(8, Math.max(2, Math.ceil(2400 / _shorterSide)))
+    : LANDING_MODE
+      ? 1
+      : Math.min(window.devicePixelRatio || 1, IS_MOBILE ? 1.5 : 2);
   let W = 0, H = 0;
   function resize() {
     W = window.innerWidth; H = window.innerHeight;
