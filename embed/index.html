@@ -8,7 +8,11 @@
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body { width:100%; height:100%; overflow:hidden; background:#14141a; font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif; color:#e7e7ea; }
-  #stage { position:fixed; inset:0; display:block; background:#14141a; }
+  /* touch-action:none keeps single-finger drag on the sphere from
+     scrolling the page on mobile. Two-finger pinch is handled
+     explicitly by our own touch handlers; the browser's default
+     pan/zoom is not what we want here. */
+  #stage { position:fixed; inset:0; display:block; background:#14141a; touch-action:none; }
 
   #fps { position:fixed; bottom:10px; right:14px; font-size:10px; color:#55555e; font-variant-numeric:tabular-nums; }
   #loader { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#14141a; z-index:100; font-size:12px; color:#8a8a95; }
@@ -729,11 +733,6 @@ async function buildAtlasAuto(pairs) {
 // thumbnails as they arrive.
 // =====================================================================
 
-// Placeholder grey for skeleton tiles. Picked to read against both light
-// and dark themes — close to neutral mid-grey so the depth-fog tint
-// that the shader applies still leaves the dot visible.
-const ATLAS_SKELETON_GREY = 0x36;
-
 function allocSkeletonAtlas(N) {
   const tileSize  = LIVE_TILE;
   const TPR       = ATLAS_TILES_ROW;
@@ -741,9 +740,11 @@ function allocSkeletonAtlas(N) {
   const atlasW    = TPR * tileSize;
   const atlasH    = atlasRows * tileSize;
 
-  // RGB byte buffer for the initial GL upload.
+  // RGB byte buffer for the initial GL upload. Black is fine — the
+  // loadedMask 1D texture (set up in main()) culls every particle for
+  // unloaded tokens, so these pixels are never sampled until grow()
+  // overwrites them with the real thumbnail.
   const atlasData = new Uint8Array(atlasW * atlasH * 3);
-  atlasData.fill(ATLAS_SKELETON_GREY);
 
   // Persistent canvas. Each landed thumbnail is drawn at its slot via
   // ctx.drawImage; we both extract a tile-region RGB buffer for live GL
@@ -753,10 +754,10 @@ function allocSkeletonAtlas(N) {
   canvas.width  = atlasW;
   canvas.height = atlasH;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  // Match the byte fill so any region the canvas hasn't been drawn into
-  // yet still reads as the same grey when we (later) re-extract it.
-  const grey = `rgb(${ATLAS_SKELETON_GREY},${ATLAS_SKELETON_GREY},${ATLAS_SKELETON_GREY})`;
-  ctx.fillStyle = grey;
+  // Background fill: pure black, so the WebP we eventually upload to R2
+  // has neutral letterbox for any slot whose fetch failed (matches the
+  // legacy build path).
+  ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, atlasW, atlasH);
 
   return { atlasData, atlasW, atlasH, canvas, ctx };
@@ -1699,6 +1700,22 @@ async function main() {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+  // Loaded-mask: 1D R8 texture, one byte per token (255 = thumbnail
+  // landed, 0 = still pending). Vertex shader samples this and culls
+  // particles for unloaded tokens by emitting them outside clip space,
+  // so the sphere literally pops in slot-by-slot during the
+  // progressive build instead of starting as a grey ball. For the
+  // cache-hit path we mark every slot loaded up front.
+  const loadedMaskData = new Uint8Array(N);
+  if (!built.progressive) loadedMaskData.fill(255);
+  const loadedMaskTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, loadedMaskTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, N, 1, 0, gl.RED, gl.UNSIGNED_BYTE, loadedMaskData);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
   // =============================================================
   // 4) HISTORY TEXTURES (float32, width=N, height=HISTORY_LEN)
   // Layout: pixel (tokenIdx, hIdx) = token's pos/fwd at history step hIdx.
@@ -1978,6 +1995,7 @@ async function main() {
   uniform sampler2D u_bigWaveTex;
   uniform sampler2D u_tokPhaseTex;   // precomputed per-token phase (was fract(sin(...)) in shader)
   uniform sampler2D u_windLoTex;     // precomputed per-token low-freq wind (was 3 sin() in shader)
+  uniform sampler2D u_loadedMask;    // R8 1D mask, 255 = token's thumbnail is in atlas, 0 = still pending
 
   uniform int   u_grid;
   uniform int   u_histLen;
@@ -2007,6 +2025,20 @@ async function main() {
     int cellIdx  = instId - tokenIdx * cells;
     int r        = cellIdx / u_grid;
     int i2       = cellIdx - r * u_grid;
+
+    // Pop-in cull: if this token's thumbnail hasn't landed yet, skip
+    // the rest of the vertex shader and emit the point outside clip
+    // space so it never reaches rasterisation. As soon as the loaded
+    // mask byte for this slot flips to 255 (driven by texSubImage2D
+    // from the progressive grow), the particle pops in.
+    float loaded = texelFetch(u_loadedMask, ivec2(tokenIdx, 0), 0).r;
+    if (loaded < 0.5) {
+      gl_Position  = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      v_color      = vec3(0.0);
+      v_depth      = 0.0;
+      return;
+    }
 
     // sheared history index. We add a constant offset of (GRID-1)/2 *
     // shearFactor so the minimum value of hShear is exactly 0 — without it
@@ -2166,6 +2198,7 @@ async function main() {
   const U = {};
   [
     'posTex','fwdTex','atlas','bigWaveTex','tokPhaseTex','windLoTex',
+    'loadedMask',
     'grid','histLen','ringHead',
     'laneWidth','shearFactor','waveAmp','sphereR','t','rotTrig',
     'center','viewport','tilesPerRow','tileSize',
@@ -2539,6 +2572,7 @@ async function main() {
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, posTex);        gl.uniform1i(U.posTex, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, fwdTex);        gl.uniform1i(U.fwdTex, 1);
       gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, atlasTex);      gl.uniform1i(U.atlas, 2);
+      gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, loadedMaskTex); gl.uniform1i(U.loadedMask, 3);
       gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);    gl.uniform1i(U.bigWaveTex, 4);
       gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, tokPhaseTex);   gl.uniform1i(U.tokPhaseTex, 5);
       gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, windLoTex);     gl.uniform1i(U.windLoTex, 6);
@@ -2609,6 +2643,10 @@ async function main() {
   // Skipped on the cache hit path (built.progressive is undefined
   // there — the atlas was already complete in R2).
   if (built.progressive && typeof built.grow === 'function') {
+    // Single shared 1-byte buffer for the loaded-mask updates. The
+    // texSubImage2D path needs an ArrayBufferView; reusing one cell
+    // keeps allocations off the per-image hot path.
+    const _maskOne = new Uint8Array([255]);
     built.grow({
       onSlotReady: (slot, tx, ty, tileSize, rgbBytes) => {
         gl.bindTexture(gl.TEXTURE_2D, atlasTex);
@@ -2617,6 +2655,14 @@ async function main() {
           gl.TEXTURE_2D, 0,
           tx, ty, tileSize, tileSize,
           gl.RGB, gl.UNSIGNED_BYTE, rgbBytes,
+        );
+        // Flip this slot's mask byte to 255 so the vertex shader stops
+        // culling its 36 864 particles starting on the next frame.
+        gl.bindTexture(gl.TEXTURE_2D, loadedMaskTex);
+        gl.texSubImage2D(
+          gl.TEXTURE_2D, 0,
+          slot, 0, 1, 1,
+          gl.RED, gl.UNSIGNED_BYTE, _maskOne,
         );
       },
       onProgress: (done, total) => {
