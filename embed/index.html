@@ -289,7 +289,11 @@ const IS_MOBILE = (typeof matchMedia !== 'undefined' && matchMedia('(pointer: co
 const LANDING_MODE = (typeof window !== 'undefined') && window.__dustopiaLanding === true;
 
 const GRID             = LANDING_MODE ? 128 : (IS_MOBILE ? 128 : 192);  // 192² = 36864 particles per image; mobile 128² = 16384; landing 128² (was 96²) for crisper hero
-const HISTORY_LEN      = LANDING_MODE ? 256 : (IS_MOBILE ? 256 : 320); // ≥ GRID + GRID·SHEAR_FACTOR
+// HISTORY_LEN was sized for SHEAR_FACTOR=0.55 (needed GRID + GRID·0.55
+// rows). Since SHEAR is now 0, we only need GRID rows + small slack
+// for camera reveals. Halving this halves the GPU memory of the two
+// pos/fwd RGBA32F textures, which previously dominated tab usage.
+const HISTORY_LEN      = LANDING_MODE ? 144 : (IS_MOBILE ? 144 : 208); // ≥ GRID + small slack
 const LANE_WIDTH       = 0.32 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical across GRID changes)
 const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
 // Calm-portrait default. Earlier passes had a heavy windswept look
@@ -590,138 +594,6 @@ function buildAtlasMeta(pairs) {
 // sample atlas at ~2-3 pixels with motion blur, so high-frequency
 // compression artifacts simply don't make it to the eye.
 const ATLAS_WEBP_QUALITY = 0.90;
-
-// Worker source: builds the atlas as a single 2D image grid on
-// OffscreenCanvas, encodes to WebP for upload, AND extracts pixel data
-// for immediate GPU upload. Returns both — the blob is what we PUT to R2,
-// the atlasData is what main() hands to texImage2D right away. We avoid
-// the round-trip "decode the WebP we just encoded" by keeping both.
-const ATLAS_WORKER_SRC = `
-self.onmessage = async (e) => {
-  const { bitmaps, tileSize, TPR, webpQuality } = e.data;
-  const N = bitmaps.length;
-  const atlasRows = Math.ceil(N / TPR);
-  const atlasW = TPR * tileSize;
-  const atlasH = atlasRows * tileSize;
-  const canvas = new OffscreenCanvas(atlasW, atlasH);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  // Black background fills any partial last row / missing tiles. Matches
-  // the dark theme bg and is invisible against #14141a.
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, atlasW, atlasH);
-  for (let i = 0; i < N; i++) {
-    const bmp = bitmaps[i];
-    if (!bmp) continue;
-    const tx = (i % TPR) * tileSize;
-    const ty = ((i / TPR) | 0) * tileSize;
-    try { ctx.drawImage(bmp, tx, ty, tileSize, tileSize); } catch {}
-    try { bmp.close(); } catch {}
-  }
-  // Upload-ready WebP, plus immediate-use 2D RGB pixel data.
-  const atlasBlob = await canvas.convertToBlob({ type: 'image/webp', quality: webpQuality });
-  let rgba;
-  try { rgba = ctx.getImageData(0, 0, atlasW, atlasH).data; }
-  catch { rgba = new Uint8ClampedArray(atlasW * atlasH * 4); }
-  const atlasData = new Uint8Array(atlasW * atlasH * 3);
-  for (let p = 0, q = 0; p < rgba.length; p += 4, q += 3) {
-    atlasData[q]   = rgba[p];
-    atlasData[q+1] = rgba[p+1];
-    atlasData[q+2] = rgba[p+2];
-  }
-  self.postMessage(
-    { atlasData: atlasData.buffer, atlasW, atlasH, atlasBlob },
-    [atlasData.buffer]
-  );
-};
-`;
-
-// Off-thread atlas build. Resolves to { meta, atlasData, atlasW, atlasH,
-// atlasBlob } — atlasData is the 2D RGB grid main() uploads to GPU; atlasBlob
-// is the WebP body uploaded to R2. Caller must ensure OffscreenCanvas +
-// createImageBitmap are available.
-async function buildAtlasInWorker(pairs) {
-  const tileSize = LIVE_TILE;
-  const bitmaps = await Promise.all(pairs.map(p =>
-    p.image ? createImageBitmap(p.image).catch(() => null) : null
-  ));
-  const blobUrl = URL.createObjectURL(new Blob([ATLAS_WORKER_SRC], { type: 'application/javascript' }));
-  let worker = null;
-  let cleaned = false;
-  const cleanup = () => {
-    if (cleaned) return; cleaned = true;
-    try { worker && worker.terminate(); } catch {}
-    try { URL.revokeObjectURL(blobUrl); } catch {}
-    for (const b of bitmaps) { if (b && typeof b.close === 'function') { try { b.close(); } catch {} } }
-  };
-  try {
-    worker = new Worker(blobUrl);
-    return await new Promise((resolve, reject) => {
-      worker.onmessage = (e) => {
-        cleanup();
-        resolve({
-          meta:       buildAtlasMeta(pairs),
-          atlasData:  new Uint8Array(e.data.atlasData),
-          atlasW:     e.data.atlasW,
-          atlasH:     e.data.atlasH,
-          atlasBlob:  e.data.atlasBlob,
-        });
-      };
-      worker.onerror = (e) => { cleanup(); reject(e); };
-      const transferList = bitmaps.filter(b => b);
-      try { worker.postMessage({ bitmaps, tileSize, TPR: ATLAS_TILES_ROW, webpQuality: ATLAS_WEBP_QUALITY }, transferList); }
-      catch (e) { cleanup(); reject(e); }
-    });
-  } catch (e) {
-    cleanup();
-    throw e;
-  }
-}
-
-// Synchronous fallback for environments without OffscreenCanvas/Worker.
-// Identical output shape; blocks the main thread on the canvas paint +
-// WebP encode for a few seconds on big wallets.
-async function buildAtlasBinary(pairs) {
-  const N = pairs.length;
-  const tileSize = LIVE_TILE;
-  const TPR = ATLAS_TILES_ROW;
-  const atlasRows = Math.ceil(N / TPR);
-  const atlasW = TPR * tileSize;
-  const atlasH = atlasRows * tileSize;
-  const c = document.createElement('canvas');
-  c.width = atlasW; c.height = atlasH;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, atlasW, atlasH);
-  for (let i = 0; i < N; i++) {
-    const { image } = pairs[i];
-    if (!image) continue;
-    const tx = (i % TPR) * tileSize;
-    const ty = ((i / TPR) | 0) * tileSize;
-    try { ctx.drawImage(image, tx, ty, tileSize, tileSize); } catch {}
-  }
-  const atlasBlob = await new Promise(res => c.toBlob(res, 'image/webp', ATLAS_WEBP_QUALITY));
-  let rgba;
-  try { rgba = ctx.getImageData(0, 0, atlasW, atlasH).data; }
-  catch { rgba = new Uint8ClampedArray(atlasW * atlasH * 4); }
-  const atlasData = new Uint8Array(atlasW * atlasH * 3);
-  for (let p = 0, q = 0; p < rgba.length; p += 4, q += 3) {
-    atlasData[q]   = rgba[p];
-    atlasData[q+1] = rgba[p+1];
-    atlasData[q+2] = rgba[p+2];
-  }
-  return { meta: buildAtlasMeta(pairs), atlasData, atlasW, atlasH, atlasBlob };
-}
-
-async function buildAtlasAuto(pairs) {
-  const offThreadOk = typeof Worker !== 'undefined'
-                   && typeof OffscreenCanvas !== 'undefined'
-                   && typeof createImageBitmap !== 'undefined';
-  if (offThreadOk) {
-    try { return await buildAtlasInWorker(pairs); }
-    catch (e) { dwarn('atlas worker failed, falling back', e); }
-  }
-  return buildAtlasBinary(pairs);
-}
 
 // =====================================================================
 // PROGRESSIVE ATLAS — instead of awaiting every NFT thumbnail before
@@ -1683,11 +1555,10 @@ async function main() {
   // =============================================================
   // 3) ATLAS TEXTURE — pre-laid 2D RGB grid, ready for texImage2D.
   // =============================================================
-  // buildAtlasAuto and tryFetchCachedAtlas both produce the atlas in
-  // 2D-grid form (atlasData / atlasW / atlasH); no 1D-to-2D unpacking
-  // step here anymore. WebP-cached atlases decode straight into the
-  // right shape, raw-RGB legacy atlases get repacked inside the
-  // fetch helper before we get here.
+  // allocSkeletonAtlas (cold path) and tryFetchCachedAtlas both produce
+  // the atlas in 2D-grid form (atlasData / atlasW / atlasH). WebP-cached
+  // atlases decode straight into the right shape; raw-RGB legacy atlases
+  // get repacked inside the fetch helper before we get here.
   const TPR = ATLAS_TILES_ROW;
   const { atlasData, atlasW, atlasH } = built;
 
@@ -2044,8 +1915,10 @@ async function main() {
     // shearFactor so the minimum value of hShear is exactly 0 — without it
     // the leftmost columns of the first few rows all clamp to history step 0,
     // producing a visible bunched/glued leading edge. With the offset every
-    // (r, col) maps to its own trail step in [0, HISTORY_LEN-1] (this still
-    // fits because HISTORY_LEN ≥ GRID + GRID·SHEAR_FACTOR by design).
+    // (r, col) maps to its own trail step in [0, HISTORY_LEN-1]. With
+    // SHEAR_FACTOR=0 (current default) hShear = r, so the bound is just
+    // GRID; HISTORY_LEN is sized as GRID + small slack. If shear comes
+    // back, bump HISTORY_LEN accordingly.
     float centered = float(i2) - float(u_grid - 1) * 0.5;
     float hShearOffset = float(u_grid - 1) * 0.5 * u_shearFactor;
     float hShear   = float(r) + centered * u_shearFactor + hShearOffset;
