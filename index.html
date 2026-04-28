@@ -126,6 +126,41 @@
   body.light .icon-btn:hover { border-color:rgba(0,0,0,.4); }
   .icon-btn svg { width:14px; height:14px; }
 
+  /* Mobile hamburger. Below 720px the nav links collapse and the toggle
+     button reveals them as a full-width dropdown. Pure CSS visibility,
+     single JS line toggles body.nav-open. */
+  .nav-toggle {
+    display:none;
+    background:transparent; border:0;
+    color:inherit; cursor:pointer;
+    width:30px; height:30px; padding:0;
+    margin-left:6px;
+  }
+  .nav-toggle svg { width:16px; height:16px; }
+  @media (max-width: 720px) {
+    .nav-toggle { display:inline-flex; align-items:center; justify-content:center; }
+    .nav-links .nav-link { display:none; }
+    body.nav-open .nav-links {
+      position:absolute; top:54px; left:0; right:0;
+      flex-direction:column; gap:0; align-items:stretch;
+      background:rgba(20,20,26,.96);
+      backdrop-filter:blur(14px) saturate(140%);
+      -webkit-backdrop-filter:blur(14px) saturate(140%);
+      padding:8px 0;
+      border-bottom:1px solid rgba(255,255,255,.08);
+    }
+    body.light.nav-open .nav-links {
+      background:rgba(244,244,245,.96);
+      border-bottom-color:rgba(0,0,0,.08);
+    }
+    body.nav-open .nav-link {
+      display:block;
+      padding:14px 24px;
+      border-radius:0;
+      font-size:14px;
+    }
+  }
+
   /* ── Hero ──────────────────────────────────────────────────── */
   .hero {
     position:relative;
@@ -377,6 +412,13 @@
         <!-- moon (dark mode toggle) — replaced with sun via JS in light mode -->
         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 8a3.5 3.5 0 0 1-4.6 3.32A4.5 4.5 0 1 0 11.5 8z"/></svg>
       </button>
+      <button id="navToggle" class="nav-toggle" type="button" aria-label="toggle menu" title="menu">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <rect x="2" y="3.25" width="12" height="1.5" rx="0.75"/>
+          <rect x="2" y="7.25" width="12" height="1.5" rx="0.75"/>
+          <rect x="2" y="11.25" width="12" height="1.5" rx="0.75"/>
+        </svg>
+      </button>
     </nav>
   </div>
 </header>
@@ -596,6 +638,17 @@
       const isLight = document.body.classList.toggle('light');
       safeStorage.set('franken-theme', isLight ? 'light' : 'dark');
       syncIcon();
+    });
+  })();
+
+  // Mobile hamburger. Toggles body.nav-open; CSS handles the dropdown.
+  // Closing on link-tap is nice — otherwise the menu lingers covering
+  // the next page during route transition.
+  (function() {
+    const t = document.getElementById('navToggle');
+    if (t) t.addEventListener('click', () => document.body.classList.toggle('nav-open'));
+    document.querySelectorAll('.nav-links .nav-link').forEach(a => {
+      a.addEventListener('click', () => document.body.classList.remove('nav-open'));
     });
   })();
 </script>
