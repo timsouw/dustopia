@@ -213,6 +213,9 @@
   .search-input:focus { border-color:#e7e7ea; }
   body.light .search-input { background:#fff; color:#18181b; border-color:rgba(0,0,0,.12); }
   body.light .search-input:focus { border-color:#18181b; }
+  /* iOS Safari auto-zooms inputs below 16 px on focus. The desktop UI
+     uses a denser 12 px to fit more meta in the picker sidebar. */
+  @media (max-width: 720px) { .search-input { font-size:16px; } }
 
   .tree-status { font-size:11px; color:#9a9aa5; padding:4px 0; }
   body.light .tree-status { color:#71717a; }

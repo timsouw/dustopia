@@ -152,7 +152,8 @@
     background:transparent; border:0; outline:none;
     color:inherit; font:inherit;
     padding:10px 12px;
-    font-size:15px; letter-spacing:-0.005em;
+    /* iOS Safari auto-zooms inputs below 16 px on focus. */
+    font-size:16px; letter-spacing:-0.005em;
   }
   .form-row input::placeholder { color:#7a7a85; }
   body.light .form-row input::placeholder { color:#a1a1aa; }
@@ -350,10 +351,15 @@
   <form class="form-row" id="goForm" autocomplete="off">
     <input
       id="addrInput"
+      name="dustopia-wallet"
       type="text"
+      inputmode="text"
       spellcheck="false"
+      autocomplete="off"
       autocapitalize="off"
       autocorrect="off"
+      data-1p-ignore
+      data-lpignore="true"
       placeholder="vitalik.eth or 0x…"
       aria-label="wallet address or ENS name">
     <button type="submit" id="goBtn">Render</button>

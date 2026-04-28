@@ -2271,7 +2271,11 @@ async function main() {
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     totalMove += Math.hypot(dx, dy);
     userYaw   += dx * 0.006;
-    userPitch += dy * 0.006;
+    // dy>0 means finger moved down. Natural feel = sphere rotates so
+    // the TOP tilts toward the viewer when you drag down (and away
+    // when you drag up). Subtract dy so the rotation axis aligns with
+    // how every map / 3D-viewer app does pitch.
+    userPitch -= dy * 0.006;
     userPitch = Math.max(-1.2, Math.min(1.2, userPitch));
     lastX = e.clientX; lastY = e.clientY;
   });
