@@ -17,6 +17,17 @@
 <meta name="twitter:title" content="dustopia · living wallet portrait">
 <meta name="twitter:description" content="Each Dustopia NFT renders the holder's Ethereum wallet as a 3D sphere of swirling thumbnails.">
 <meta name="twitter:image" content="https://api.dustopia.xyz/api/preview/1">
+<meta property="og:image:width" content="1080">
+<meta property="og:image:height" content="1080">
+<meta property="og:image:type" content="image/webp">
+<meta property="og:site_name" content="dustopia">
+<meta property="og:locale" content="en_US">
+
+<!-- Inter for body, Instrument Serif for editorial display.
+     preconnect saves a round-trip on the HTTP/2 handshake. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 
 <style>
   /* ── Reset + base ─────────────────────────────────────────── */
@@ -24,8 +35,8 @@
   html, body {
     width:100%;
     background:#14141a; color:#e7e7ea;
-    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
-    font-feature-settings: "ss01", "ss02";
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    font-feature-settings: "ss01", "ss02", "cv11";
     -webkit-font-smoothing:antialiased;
     -moz-osx-font-smoothing:grayscale;
   }
@@ -63,12 +74,38 @@
   body.light section { border-bottom-color:rgba(0,0,0,.08); }
   section:last-of-type { border-bottom:0; }
   section h2 {
-    font-size:28px; font-weight:500; letter-spacing:-0.015em;
-    margin-bottom:32px; max-width:32ch;
+    font-family:'Instrument Serif', Georgia, "Times New Roman", serif;
+    font-size:38px; font-weight:400; letter-spacing:-0.02em;
+    margin-bottom:32px; max-width:30ch;
+    line-height:1.1;
   }
   @media (max-width: 600px) {
     section { padding:64px 0; }
-    section h2 { font-size:22px; margin-bottom:24px; }
+    section h2 { font-size:28px; margin-bottom:24px; }
+  }
+
+  /* Manifesto — editorial section between hero and "how it works".
+     Sells the "why" before the page descends into mechanics. */
+  .manifesto { padding:120px 0; }
+  @media (max-width: 600px) { .manifesto { padding:72px 0; } }
+  .manifesto-quote {
+    font-family:'Instrument Serif', Georgia, "Times New Roman", serif;
+    font-size:56px; font-weight:400; line-height:1.08; letter-spacing:-0.025em;
+    max-width:18ch; margin-bottom:36px;
+  }
+  .manifesto-body {
+    font-size:18px; line-height:1.6; color:#9a9aa5;
+    max-width:52ch;
+  }
+  body.light .manifesto-body { color:#52525b; }
+  .manifesto-body em {
+    font-family:'Instrument Serif', Georgia, serif;
+    font-style:italic; font-size:1.08em; color:#e7e7ea;
+  }
+  body.light .manifesto-body em { color:#18181b; }
+  @media (max-width: 600px) {
+    .manifesto-quote { font-size:38px; margin-bottom:24px; }
+    .manifesto-body  { font-size:16px; }
   }
   section p {
     font-size:15px; line-height:1.65; color:#9a9aa5; max-width:64ch;
@@ -252,12 +289,15 @@
     max-width:520px;
   }
   .hero h1 {
-    font-size:64px; font-weight:600; letter-spacing:-0.035em;
-    line-height:1; margin-bottom:18px;
+    font-family:'Instrument Serif', Georgia, "Times New Roman", serif;
+    font-size:88px; font-weight:400; letter-spacing:-0.04em;
+    line-height:.92; margin-bottom:18px;
   }
   .hero .tagline {
-    font-size:18px; color:#cfd1d7; margin-bottom:26px;
-    font-weight:400; letter-spacing:-0.005em;
+    font-family:'Instrument Serif', Georgia, serif;
+    font-style:italic;
+    font-size:22px; color:#cfd1d7; margin-bottom:26px;
+    font-weight:400; letter-spacing:-0.01em;
   }
   body.light .hero .tagline { color:#3f3f46; }
   .hero-desc {
@@ -266,8 +306,8 @@
   }
   body.light .hero-desc { color:#52525b; }
   @media (max-width: 600px) {
-    .hero h1 { font-size:48px; }
-    .hero .tagline { font-size:16px; }
+    .hero h1 { font-size:56px; }
+    .hero .tagline { font-size:19px; }
   }
 
   /* CTAs */
@@ -472,6 +512,19 @@
         </div>
       </div>
     </div>
+  </div>
+</section>
+
+<section class="manifesto">
+  <div class="wrap">
+    <p class="manifesto-quote">Every wallet is a self-portrait.</p>
+    <p class="manifesto-body">
+      Dustopia turns a decade of on-chain decisions into a <em>living planet
+      of dust</em> — each NFT a swirling ribbon, each collection a flock with
+      its own orbit. The sphere rearranges itself the moment a token enters
+      or leaves the wallet. It is not a snapshot. It is an autobiography
+      that keeps writing itself.
+    </p>
   </div>
 </section>
 

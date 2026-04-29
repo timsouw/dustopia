@@ -5,14 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pfp · dustopia</title>
 <meta name="description" content="Generate a 2000×2000 dustopia sphere from any Ethereum wallet. Drop in as your Twitter / Telegram / Discord profile picture.">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dustopia.xyz/pfp">
+<meta property="og:title" content="dustopia · save as pfp">
+<meta property="og:description" content="Generate a 2000×2000 sphere of your wallet's NFTs. PNG for the avatar, MP4 for the loop.">
+<meta property="og:image" content="https://api.dustopia.xyz/api/preview/1">
+<meta property="og:image:width" content="1080">
+<meta property="og:image:height" content="1080">
+<meta property="og:image:type" content="image/webp">
+<meta property="og:site_name" content="dustopia">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="dustopia · save as pfp">
+<meta name="twitter:description" content="Generate a 2000×2000 sphere of your wallet's NFTs.">
+<meta name="twitter:image" content="https://api.dustopia.xyz/api/preview/1">
+
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a'/></radialGradient><clipPath id='c'><circle cx='32' cy='32' r='28'/></clipPath></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/><g clip-path='url(%23c)' fill='none' stroke='%23ffffff' stroke-linecap='round'><ellipse cx='32' cy='32' rx='28' ry='8' stroke-opacity='0.7' stroke-width='2.8' transform='rotate(-22 32 32)'/><ellipse cx='32' cy='32' rx='28' ry='4' stroke-opacity='0.45' stroke-width='1.8' transform='rotate(38 32 32)'/></g></svg>">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body {
     width:100%;
     background:#14141a; color:#e7e7ea;
-    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
     -webkit-font-smoothing:antialiased;
     -moz-osx-font-smoothing:grayscale;
   }
@@ -128,7 +147,8 @@
     margin-bottom:28px;
   }
   .pfp-head h1 {
-    font-size:32px; font-weight:600; letter-spacing:-0.02em; line-height:1.1;
+    font-family:'Instrument Serif', Georgia, "Times New Roman", serif;
+    font-size:48px; font-weight:400; letter-spacing:-0.025em; line-height:1.05;
   }
   .pfp-head p {
     font-size:14px; line-height:1.55; color:#9a9aa5; max-width:60ch;
