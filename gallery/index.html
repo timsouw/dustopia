@@ -261,6 +261,16 @@
     overflow:hidden;
     border-bottom:1px solid rgba(255,255,255,.06);
     position:relative;
+    flex-shrink:0;
+  }
+  /* On mobile the 1:1 hero eats too much of the viewport and the body
+     (title + traits + actions) scrolls off-screen. Cap it at 36vh and
+     let the body claim the rest with its existing overflow-y:auto. */
+  @media (max-width: 600px) {
+    .modal-backdrop { padding:12px; }
+    .modal-card { max-height:calc(100vh - 24px); border-radius:14px; }
+    .modal-hero { aspect-ratio:auto; height:36vh; }
+    .modal-body { padding:18px 18px 20px; }
   }
   body.light .modal-hero { background:#e9e9ec; border-bottom-color:rgba(0,0,0,.06); }
   .modal-hero img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -565,8 +575,10 @@
   // ── Modal ───────────────────────────────────────────────────
   // One modal node, populated per click. Body fetches the metadata JSON
   // straight from the worker (cheap — it's edge-cached) so we can show
-  // OpenSea-equivalent traits + description without baking that into
-  // the gallery list endpoint.
+  // OpenSea-equivalent traits without baking that into the gallery list
+  // endpoint. Description is intentionally dropped from the modal — it's
+  // boilerplate, identical for every token, and just eats vertical
+  // space on mobile where the sphere hero already takes 36vh.
   const modal      = document.getElementById('modal');
   const modalHero  = document.getElementById('modalHero');
   const modalBody  = document.getElementById('modalBody');
@@ -587,7 +599,13 @@
     fetch(`${API_URL}/api/metadata/${encodeURIComponent(tokenId)}`)
       .then((r) => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
       .then((meta) => {
-        const traits = (meta.attributes || []).map((a) => `
+        // Modal cards are tight on mobile — drop traits the user already
+        // knows from context. "Network" is always Ethereum, "Description"
+        // is the same boilerplate paragraph for every token.
+        const HIDDEN_TRAITS = new Set(['network']);
+        const traits = (meta.attributes || [])
+          .filter((a) => !HIDDEN_TRAITS.has(String(a.trait_type ?? '').toLowerCase()))
+          .map((a) => `
           <div class="trait">
             <span class="k">${escHtml(a.trait_type ?? '')}</span>
             <span class="v" title="${escHtml(String(a.value))}">${escHtml(String(a.value))}</span>
@@ -599,7 +617,6 @@
         const holderUrl = ownerAddr ? `/holder/${encodeURIComponent(ownerAddr)}` : '';
         modalBody.innerHTML = `
           <div class="modal-title">${escHtml(meta.name || `Dustopia #${tokenId}`)}</div>
-          ${meta.description ? `<div class="modal-desc">${escHtml(meta.description)}</div>` : ''}
           ${traits ? `<div class="modal-traits">${traits}</div>` : ''}
           <div class="modal-actions">
             <a href="${liveUrl}" class="primary">Open live sphere →</a>
