@@ -7,12 +7,16 @@
 <meta name="description" content="Dustopia tokens owned by this address. Each token is a configurable sphere of the holder's NFTs.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
 
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body {
     width:100%;
     background:#14141a; color:#e7e7ea;
-    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
     -webkit-font-smoothing:antialiased;
     -moz-osx-font-smoothing:grayscale;
   }
@@ -129,8 +133,9 @@
   }
   body.light .profile-head { border-bottom-color:rgba(0,0,0,.08); }
   .profile-head h1 {
-    font-size:32px; font-weight:600; letter-spacing:-0.02em;
-    line-height:1.1;
+    font-family:'Instrument Serif', Georgia, "Times New Roman", serif;
+    font-size:48px; font-weight:400; letter-spacing:-0.025em;
+    line-height:1.05;
   }
   .profile-head .addr {
     font-family:"SF Mono","Menlo",ui-monospace,monospace;
