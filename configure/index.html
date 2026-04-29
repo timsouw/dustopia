@@ -18,7 +18,7 @@
   /* ── Header ─────────────────────────────────────────────────── */
   header {
     position:sticky; top:0; z-index:50;
-    display:flex; align-items:center; justify-content:space-between;
+    display:flex; align-items:center;
     padding:14px 22px;
     background:rgba(20,20,26,.78); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
     border-bottom:1px solid rgba(255,255,255,.06);
@@ -30,7 +30,26 @@
   .brand .crumb { color:#9a9aa5; }
   body.light .brand .crumb { color:#71717a; }
 
-  .head-actions { display:flex; gap:8px; align-items:center; }
+  /* Global nav — kept in sync with landing/play/pfp/gallery so the
+     same set of section links appears on every page. The /configure
+     header used to skip these because it was the oldest layout in
+     the repo. */
+  .nav-links { display:flex; align-items:center; gap:6px; margin:0 16px 0 24px; }
+  .nav-link {
+    padding:6px 12px; border-radius:6px;
+    font-size:12px; letter-spacing:.02em; color:#9a9aa5;
+    transition:color 120ms, background 120ms;
+  }
+  .nav-link:hover { color:#e7e7ea; background:rgba(255,255,255,.05); }
+  body.light .nav-link { color:#71717a; }
+  body.light .nav-link:hover { color:#18181b; background:rgba(0,0,0,.04); }
+  .nav-link.current { color:#e7e7ea; background:rgba(255,255,255,.06); }
+  body.light .nav-link.current { color:#18181b; background:rgba(0,0,0,.05); }
+  @media (max-width: 880px) {
+    .nav-links { display:none; }
+  }
+
+  .head-actions { display:flex; gap:8px; align-items:center; margin-left:auto; }
   .btn {
     background:transparent; border:1px solid rgba(255,255,255,.18); color:#e7e7ea;
     font-family:inherit; font-size:11px; letter-spacing:.04em;
@@ -311,6 +330,14 @@
     <span class="sep">/</span>
     <span class="crumb" id="crumb">configure</span>
   </div>
+  <nav class="nav-links" aria-label="primary">
+    <a href="/#how" class="nav-link">how it works</a>
+    <a href="/pfp" class="nav-link">save as pfp</a>
+    <a href="/play" class="nav-link">play</a>
+    <a href="/configure" class="nav-link current">configure</a>
+    <a href="/gallery" class="nav-link">gallery</a>
+    <a href="/leaderboard" class="nav-link">leaderboard</a>
+  </nav>
   <div class="head-actions">
     <button id="themeBtn" class="btn" title="toggle theme">☾ Dark</button>
     <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
