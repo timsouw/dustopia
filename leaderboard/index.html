@@ -251,15 +251,22 @@
     cursor:pointer;
   }
 
-  /* Mobile */
+  /* Mobile — show only the column that matches the active sort mode.
+     `data-mode` is set on .lb-table by renderBoard; CSS hides the
+     other two columns. Without this, mobile always showed the
+     collections column even when the user had picked "By NFTs". */
   @media (max-width:640px) {
     .lb-row {
-      grid-template-columns: 32px minmax(0, 1fr) 64px;
+      grid-template-columns: 28px minmax(0, 1fr) 90px;
       gap:10px;
       padding:12px 14px;
     }
-    .lb-row .col-tokens, .lb-row .col-dustopias { display:none; }
-    .lb-row.head .col-tokens, .lb-row.head .col-dustopias { display:none; }
+    .lb-table[data-mode="collections"] .col-tokens,
+    .lb-table[data-mode="collections"] .col-dustopias,
+    .lb-table[data-mode="tokens"]      .col-collections,
+    .lb-table[data-mode="tokens"]      .col-dustopias,
+    .lb-table[data-mode="dustopias"]   .col-collections,
+    .lb-table[data-mode="dustopias"]   .col-tokens { display:none; }
     .lb-rank { font-size:12px; }
     .lb-addr { font-size:12.5px; }
     .lb-stat { font-size:12.5px; }
@@ -478,13 +485,15 @@
 
   function renderBoard(holders) {
     if (!holders.length) { renderEmpty(); return; }
+    // Spell out what the abbreviated columns actually count. "colls"
+    // wasn't readable on mobile where it's the only visible stat.
     const headRow = `
       <div class="lb-row head">
         <span>#</span>
         <span>holder</span>
-        <span class="col-collections" style="text-align:right">colls</span>
+        <span class="col-collections" style="text-align:right">collections</span>
         <span class="col-tokens" style="text-align:right">nfts</span>
-        <span class="col-dustopias" style="text-align:right">d-tokens</span>
+        <span class="col-dustopias" style="text-align:right">dustopias</span>
       </div>`;
     const rows = holders.map((h, i) => {
       const rank = i + 1;
@@ -507,7 +516,7 @@
         </a>`;
     }).join('');
     document.getElementById('board').innerHTML = `
-      <div class="lb-table">${headRow}${rows}</div>`;
+      <div class="lb-table" data-mode="${state.mode}">${headRow}${rows}</div>`;
   }
 
   // State + sort wiring.
