@@ -152,58 +152,173 @@
   .gallery-head .stats b { color:#e7e7ea; font-weight:600; }
   body.light .gallery-head .stats b { color:#18181b; }
 
-  /* Grid of token cards */
+  /* Grid of circular token tiles. The `aspect-ratio: 1` on the tile
+     keeps each cell square; the inner sphere clips to a circle. The
+     auto-fill grid breaks responsively without media queries. */
   .token-grid {
     display:grid;
-    grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
-    gap:16px;
+    grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));
+    gap:24px;
   }
-  .token-card {
-    display:flex; flex-direction:column;
-    background:rgba(255,255,255,.025);
-    border:1px solid rgba(255,255,255,.06);
-    border-radius:12px;
-    overflow:hidden;
-    transition:border-color 200ms, transform 200ms;
-  }
-  .token-card:hover { border-color:rgba(255,255,255,.18); transform:translateY(-2px); }
-  body.light .token-card { background:rgba(0,0,0,.02); border-color:rgba(0,0,0,.06); }
-  body.light .token-card:hover { border-color:rgba(0,0,0,.18); }
-  .token-img-wrap {
+  .tile {
     position:relative;
     aspect-ratio:1 / 1;
-    background:#14141a;
+    border-radius:50%;
     overflow:hidden;
+    cursor:pointer;
+    background:#0e0e14;
+    border:1px solid rgba(255,255,255,.06);
+    transition:transform 220ms cubic-bezier(.2,.7,.2,1),
+               border-color 220ms;
   }
-  body.light .token-img-wrap { background:#e9e9ec; }
-  .token-img-wrap img {
-    width:100%; height:100%; object-fit:cover; display:block;
+  body.light .tile { background:#e9e9ec; border-color:rgba(0,0,0,.06); }
+  .tile:hover { transform:scale(1.02); border-color:rgba(255,255,255,.22); }
+  body.light .tile:hover { border-color:rgba(0,0,0,.22); }
+
+  .tile img {
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit:cover;
+    display:block;
+    transition:filter 260ms;
   }
-  .token-meta {
-    padding:14px 14px 14px;
-    display:flex; flex-direction:column; gap:6px;
+  /* Until the tile enters the viewport (and the IntersectionObserver
+     swaps in the real preview) the img has no src — show a gentle
+     placeholder so the circle isn't a black hole. */
+  .tile.is-pending { background:linear-gradient(135deg, #1a1a22 0%, #0e0e14 100%); }
+  body.light .tile.is-pending { background:linear-gradient(135deg, #f0f0f3 0%, #e2e2e6 100%); }
+
+  /* Hover overlay: blur the sphere behind, drop the token name on top.
+     We use backdrop-filter so the blur applies to whatever the img is
+     painting underneath, which keeps animated frames blurring smoothly
+     instead of stuttering between snapshot states. */
+  .tile-overlay {
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:4px;
+    color:#fafafa;
+    opacity:0;
+    backdrop-filter:blur(0px) brightness(.85);
+    -webkit-backdrop-filter:blur(0px) brightness(.85);
+    background:rgba(20,20,26,0);
+    transition:opacity 200ms, backdrop-filter 240ms,
+               -webkit-backdrop-filter 240ms, background 240ms;
+    pointer-events:none;
+    text-align:center;
+    padding:0 18px;
   }
-  .token-name {
-    font-size:13.5px; font-weight:600; letter-spacing:-0.005em;
+  .tile:hover .tile-overlay {
+    opacity:1;
+    backdrop-filter:blur(8px) brightness(.7);
+    -webkit-backdrop-filter:blur(8px) brightness(.7);
+    background:rgba(20,20,26,.18);
   }
-  .token-row {
-    display:flex; align-items:center; justify-content:space-between;
+  body.light .tile:hover .tile-overlay { background:rgba(244,244,245,.18); }
+  .tile-overlay .name {
+    font-size:18px; font-weight:600; letter-spacing:-0.01em;
+    color:#fafafa;
+  }
+  .tile-overlay .sub {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:10.5px; letter-spacing:.04em; color:rgba(250,250,250,.7);
+  }
+
+  /* Modal — opens on tile click. Single instance, populated per click.
+     Click on backdrop or Escape closes; click inside the card stays. */
+  .modal-backdrop {
+    position:fixed; inset:0; z-index:200;
+    display:none; align-items:center; justify-content:center;
+    padding:24px;
+    background:rgba(0,0,0,.55);
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+  }
+  .modal-backdrop.open { display:flex; }
+  body.light .modal-backdrop { background:rgba(20,20,26,.42); }
+  .modal-card {
+    width:100%; max-width:520px;
+    max-height:calc(100vh - 48px);
+    display:flex; flex-direction:column;
+    background:#16161d;
+    border:1px solid rgba(255,255,255,.08);
+    border-radius:18px;
+    overflow:hidden;
+    color:#e7e7ea;
+  }
+  body.light .modal-card { background:#fafafa; color:#18181b; border-color:rgba(0,0,0,.08); }
+  .modal-hero {
+    aspect-ratio:1 / 1;
+    background:#0e0e14;
+    overflow:hidden;
+    border-bottom:1px solid rgba(255,255,255,.06);
+    position:relative;
+  }
+  body.light .modal-hero { background:#e9e9ec; border-bottom-color:rgba(0,0,0,.06); }
+  .modal-hero img { width:100%; height:100%; object-fit:cover; display:block; }
+  .modal-body {
+    padding:22px 24px 24px;
+    overflow-y:auto;
+    display:flex; flex-direction:column; gap:14px;
+  }
+  .modal-title {
+    font-size:22px; font-weight:600; letter-spacing:-0.015em;
+  }
+  .modal-desc {
+    font-size:13px; line-height:1.55; color:#9a9aa5;
+  }
+  body.light .modal-desc { color:#52525b; }
+  .modal-traits {
+    display:grid; grid-template-columns:repeat(2, minmax(0, 1fr));
     gap:8px;
   }
-  .token-owner {
+  .trait {
+    padding:10px 12px;
+    border:1px solid rgba(255,255,255,.06);
+    border-radius:8px;
+    background:rgba(255,255,255,.02);
+    display:flex; flex-direction:column; gap:2px;
+  }
+  body.light .trait { border-color:rgba(0,0,0,.06); background:rgba(0,0,0,.02); }
+  .trait .k {
     font-family:"SF Mono","Menlo",ui-monospace,monospace;
-    font-size:11px; color:#9a9aa5;
+    font-size:9.5px; letter-spacing:.12em; text-transform:uppercase;
+    color:#7a7a85;
+  }
+  body.light .trait .k { color:#71717a; }
+  .trait .v {
+    font-size:13px; font-weight:500; letter-spacing:-0.005em;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-    max-width:60%;
   }
-  body.light .token-owner { color:#71717a; }
-  .token-owner:hover { color:#e7e7ea; }
-  body.light .token-owner:hover { color:#18181b; }
-  .token-stat {
-    font-family:"SF Mono","Menlo",ui-monospace,monospace;
-    font-size:10.5px; color:#7a7a85;
+  .modal-actions {
+    display:flex; gap:8px; flex-wrap:wrap;
+    padding-top:4px;
   }
-  body.light .token-stat { color:#71717a; }
+  .modal-actions a {
+    flex:1; min-width:140px;
+    padding:9px 12px; border-radius:8px;
+    font-size:12px; font-weight:500; letter-spacing:-0.005em;
+    text-align:center;
+    border:1px solid rgba(255,255,255,.14);
+    color:#e7e7ea;
+    transition:border-color 140ms, background 140ms;
+  }
+  .modal-actions a:hover { border-color:#e7e7ea; background:rgba(255,255,255,.04); }
+  .modal-actions a.primary {
+    background:#e7e7ea; color:#101217; border-color:#e7e7ea;
+  }
+  .modal-actions a.primary:hover { background:#fff; color:#101217; }
+  body.light .modal-actions a { color:#18181b; border-color:rgba(0,0,0,.18); }
+  body.light .modal-actions a:hover { border-color:#000; background:rgba(0,0,0,.03); }
+  body.light .modal-actions a.primary { background:#18181b; color:#fafafa; border-color:#18181b; }
+  body.light .modal-actions a.primary:hover { background:#000; color:#fafafa; }
+  .modal-close {
+    position:absolute; top:12px; right:12px; z-index:1;
+    width:30px; height:30px; border-radius:50%;
+    background:rgba(0,0,0,.5); color:#fafafa;
+    border:0; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center;
+    font-size:18px; line-height:1;
+  }
+  .modal-close:hover { background:rgba(0,0,0,.7); }
 
   .empty-state, .error-state {
     padding:60px 24px;
@@ -225,15 +340,15 @@
   }
   body.light .empty-state .cta { background:#18181b; color:#fafafa; }
 
-  /* Skeleton loader */
+  /* Skeleton loader — circles to match the live grid. */
   .skeleton-grid {
     display:grid;
-    grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
-    gap:16px;
+    grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));
+    gap:24px;
   }
   .skeleton-card {
     aspect-ratio:1 / 1;
-    border-radius:12px;
+    border-radius:50%;
     background:linear-gradient(90deg,
       rgba(255,255,255,.03) 0%,
       rgba(255,255,255,.06) 50%,
@@ -293,6 +408,14 @@
 
   <section id="grid"></section>
 </main>
+
+<div id="modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="modal-card" id="modalCard">
+    <button class="modal-close" id="modalClose" type="button" aria-label="close">×</button>
+    <div class="modal-hero" id="modalHero"></div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
 
 <script>
   window.safeStorage = (function() {
@@ -367,41 +490,136 @@
       `<div class="error-state">${escHtml(msg)}</div>`;
   }
 
-  // Card per token. Tile click navigates to /embed/<owner>?token=<id>;
-  // owner short-link inside the meta row navigates to /holder/<owner>
-  // — but we need to prevent the inner click bubbling to the outer
-  // anchor (otherwise the outer wins). data-stop on the inner anchor
-  // handles that.
+  // Tiny transparent placeholder used while a tile is off-screen. Setting
+  // src='' would show a broken-image icon in some browsers; an actual data
+  // URL keeps the <img> happy and frees the previous animated WebP.
+  const BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+
+  // Render circular tiles, one per token. The img has `data-src` until
+  // the IntersectionObserver swaps the live preview URL in. While not
+  // visible the img stays on the placeholder so an animated WebP isn't
+  // running off-screen and chewing CPU/GPU. The whole tile is one big
+  // click target that opens the modal.
   function renderTokens(tokens) {
     if (!tokens.length) { renderEmpty(); return; }
     const cards = tokens.map((t) => {
       const stat = (t.tokens != null && t.collections != null)
-        ? `<span class="token-stat">${t.tokens}t · ${t.collections}c</span>`
-        : `<span class="token-stat">—</span>`;
+        ? `${t.tokens}t · ${t.collections}c`
+        : `${escHtml(shortAddr(t.owner))}`;
       return `
-        <a href="/embed/${encodeURIComponent(t.owner)}?token=${escHtml(t.tokenId)}"
-           class="token-card"
-           title="Open Dustopia #${escHtml(t.tokenId)}">
-          <div class="token-img-wrap">
-            <img src="${API_URL}/api/preview/${escHtml(t.tokenId)}"
-                 alt="Dustopia #${escHtml(t.tokenId)}"
-                 loading="lazy" decoding="async">
+        <div class="tile is-pending"
+             data-token-id="${escHtml(t.tokenId)}"
+             data-owner="${escHtml(t.owner)}"
+             title="Dustopia #${escHtml(t.tokenId)}">
+          <img alt="Dustopia #${escHtml(t.tokenId)}"
+               src="${BLANK_IMG}"
+               data-src="${API_URL}/api/preview/${escHtml(t.tokenId)}"
+               decoding="async">
+          <div class="tile-overlay">
+            <span class="name">Dustopia #${escHtml(t.tokenId)}</span>
+            <span class="sub">${stat}</span>
           </div>
-          <div class="token-meta">
-            <span class="token-name">Dustopia #${escHtml(t.tokenId)}</span>
-            <div class="token-row">
-              <a class="token-owner" href="/holder/${encodeURIComponent(t.owner)}"
-                 onclick="event.stopPropagation()" title="${escHtml(t.owner)}">
-                ${escHtml(shortAddr(t.owner))}
-              </a>
-              ${stat}
-            </div>
-          </div>
-        </a>`;
+        </div>`;
     }).join('');
-    document.getElementById('grid').innerHTML = `
-      <div class="token-grid">${cards}</div>`;
+    const grid = document.getElementById('grid');
+    grid.innerHTML = `<div class="token-grid">${cards}</div>`;
+
+    // Observe every tile. When intersecting, swap to the live preview;
+    // when scrolled out of view, swap back to the blank placeholder so
+    // the browser drops the animated frames. Threshold 0.05 is enough
+    // to debounce micro-scrolls without leaving torn animations.
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const tile = e.target;
+        const img = tile.querySelector('img');
+        if (!img) continue;
+        if (e.isIntersecting) {
+          if (img.src !== img.dataset.src) img.src = img.dataset.src;
+          tile.classList.remove('is-pending');
+        } else {
+          if (img.src !== BLANK_IMG) img.src = BLANK_IMG;
+        }
+      }
+    }, { rootMargin: '200px 0px', threshold: 0.05 });
+    grid.querySelectorAll('.tile').forEach((tile) => io.observe(tile));
+
+    // Click → modal. Delegated so we don't pin a listener per tile.
+    grid.addEventListener('click', onGridClick);
   }
+
+  function onGridClick(ev) {
+    const tile = ev.target.closest('.tile');
+    if (!tile) return;
+    openModal(tile.dataset.tokenId, tile.dataset.owner);
+  }
+
+  // ── Modal ───────────────────────────────────────────────────
+  // One modal node, populated per click. Body fetches the metadata JSON
+  // straight from the worker (cheap — it's edge-cached) so we can show
+  // OpenSea-equivalent traits + description without baking that into
+  // the gallery list endpoint.
+  const modal      = document.getElementById('modal');
+  const modalHero  = document.getElementById('modalHero');
+  const modalBody  = document.getElementById('modalBody');
+  const modalClose = document.getElementById('modalClose');
+
+  function openModal(tokenId, owner) {
+    if (!tokenId) return;
+    modalHero.innerHTML = `
+      <img src="${API_URL}/api/preview/${escHtml(tokenId)}"
+           alt="Dustopia #${escHtml(tokenId)}">`;
+    modalBody.innerHTML = `
+      <div class="modal-title">Dustopia #${escHtml(tokenId)}</div>
+      <div class="modal-desc">Loading…</div>`;
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+
+    fetch(`${API_URL}/api/metadata/${encodeURIComponent(tokenId)}`)
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then((meta) => {
+        const traits = (meta.attributes || []).map((a) => `
+          <div class="trait">
+            <span class="k">${escHtml(a.trait_type ?? '')}</span>
+            <span class="v" title="${escHtml(String(a.value))}">${escHtml(String(a.value))}</span>
+          </div>`).join('');
+        const ownerAddr = owner || '';
+        const liveUrl = ownerAddr
+          ? `/embed/${encodeURIComponent(ownerAddr)}?token=${encodeURIComponent(tokenId)}`
+          : (meta.animation_url || '#');
+        const holderUrl = ownerAddr ? `/holder/${encodeURIComponent(ownerAddr)}` : '';
+        modalBody.innerHTML = `
+          <div class="modal-title">${escHtml(meta.name || `Dustopia #${tokenId}`)}</div>
+          ${meta.description ? `<div class="modal-desc">${escHtml(meta.description)}</div>` : ''}
+          ${traits ? `<div class="modal-traits">${traits}</div>` : ''}
+          <div class="modal-actions">
+            <a href="${liveUrl}" class="primary">Open live sphere →</a>
+            ${holderUrl ? `<a href="${holderUrl}">Holder profile</a>` : ''}
+          </div>`;
+      })
+      .catch((e) => {
+        modalBody.innerHTML = `
+          <div class="modal-title">Dustopia #${escHtml(tokenId)}</div>
+          <div class="modal-desc">Couldn't load metadata: ${escHtml(e.message)}</div>`;
+      });
+  }
+
+  function closeModal() {
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+    // Drop the hero img src so the animated WebP isn't decoding behind
+    // the closed modal.
+    modalHero.innerHTML = '';
+  }
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+  modalClose.addEventListener('click', closeModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('open')) closeModal();
+  });
 
   async function init() {
     renderSkeletons(8);
