@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>try dustopia · paste any wallet</title>
 <meta name="description" content="See any Ethereum address as a 3D sphere of swirling NFTs. Paste a wallet or ENS name and explore.">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff' stop-opacity='1'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a' stop-opacity='1'/></radialGradient></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/></svg>">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a'/></radialGradient><clipPath id='c'><circle cx='32' cy='32' r='28'/></clipPath></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/><g clip-path='url(%23c)' fill='none' stroke='%23ffffff' stroke-linecap='round'><ellipse cx='32' cy='32' rx='28' ry='8' stroke-opacity='0.7' stroke-width='2.8' transform='rotate(-22 32 32)'/><ellipse cx='32' cy='32' rx='28' ry='4' stroke-opacity='0.45' stroke-width='1.8' transform='rotate(38 32 32)'/></g></svg>">
 
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://dustopia.xyz/play">
@@ -75,8 +75,8 @@
   }
   .brand-mark {
     width:18px; height:18px; border-radius:50%;
-    background:radial-gradient(38% 32% at 38% 32%,
-      #ffffff 0%, #d8d2ff 30%, #7262d4 60%, #120a2a 100%);
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a'/></radialGradient><clipPath id='c'><circle cx='32' cy='32' r='28'/></clipPath></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/><g clip-path='url(%23c)' fill='none' stroke='%23ffffff' stroke-linecap='round'><ellipse cx='32' cy='32' rx='28' ry='8' stroke-opacity='0.7' stroke-width='2.8' transform='rotate(-22 32 32)'/><ellipse cx='32' cy='32' rx='28' ry='4' stroke-opacity='0.45' stroke-width='1.8' transform='rotate(38 32 32)'/></g></svg>");
+    background-size:cover;
     flex-shrink:0;
   }
   .nav-links { display:flex; align-items:center; gap:6px; }
