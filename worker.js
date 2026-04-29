@@ -199,7 +199,7 @@ async function handleEns(rawName, request, env) {
 // after wallet connect. One Alchemy call, short KV cache. Public — token
 // ownership is on-chain anyway, no privacy concern in exposing the read.
 // =====================================================================
-const OWNED_TTL = 60;             // seconds — ownership shifts often during sales
+const OWNED_TTL = 6 * 60 * 60;    // 6h — ownership changes are caught by the transfer webhook (which wipes from + to addresses); polling alone can't bust the cache
 
 async function handleOwned(addr, request, env) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
@@ -268,10 +268,10 @@ async function handleOwned(addr, request, env) {
 // Cache TTL is short (5 min) so the leaderboard / gallery feel fresh
 // when transfers happen, but long enough that bursts don't fan-out.
 // =====================================================================
-const ALL_TOKENS_TTL          = 5 * 60;     // 5 min full-response cache
+const ALL_TOKENS_TTL          = 30 * 60;    // 30 min — recomputed only when the supply count changes; mint events would need to be wired up to invalidate sooner if instant gallery refresh ever matters
 const ALL_TOKENS_HARD_CAP     = 2000;       // safety cap on enumeration
 const ALL_TOKENS_CONCURRENCY  = 25;         // owner-lookup parallelism
-const TOTAL_SUPPLY_TTL        = 60;         // 1 min per-totalSupply cache
+const TOTAL_SUPPLY_TTL        = 5 * 60;     // 5 min — totalSupply only ticks when a token mints; no need to fetch every minute
 
 async function fetchTotalSupply(env) {
   const cacheKey = `totalsupply:${NFT_CONTRACT.toLowerCase()}`;
@@ -1310,6 +1310,11 @@ async function handleWebhookTransfer(request, env, ctx) {
   const activities = (body && body.event && Array.isArray(body.event.activity))
     ? body.event.activity : [];
   const tokenIds = new Set();
+  // Track from + to addresses too — we use them to wipe the owned-cache
+  // entries (`owned:<addr>` / list of dustopia tokens that addr holds)
+  // for both sides of the transfer. Without this the /holder page for
+  // either party stays stale up to OWNED_TTL.
+  const addrsToWipe = new Set();
   for (const act of activities) {
     if (!act || typeof act !== 'object') continue;
     if ((act.category || '').toLowerCase() !== 'erc721') continue;
@@ -1324,6 +1329,10 @@ async function handleWebhookTransfer(request, env, ctx) {
     } catch { continue; }
     if (!/^\d+$/.test(idDec) || idDec.length > 78) continue;
     tokenIds.add(idDec);
+    const fromA = (act.fromAddress || '').toLowerCase();
+    const toA   = (act.toAddress   || '').toLowerCase();
+    if (/^0x[0-9a-f]{40}$/.test(fromA)) addrsToWipe.add(fromA);
+    if (/^0x[0-9a-f]{40}$/.test(toA))   addrsToWipe.add(toA);
   }
   if (!tokenIds.size) return jsonResponse({ ok: true, cleared: 0 }, request);
 
@@ -1340,6 +1349,14 @@ async function handleWebhookTransfer(request, env, ctx) {
   if (ctx) {
     ctx.waitUntil(Promise.all(ids.map(id =>
       env.WALLET_CACHE.delete(`owner:${NFT_CONTRACT.toLowerCase()}:${id}`).catch(() => {})
+    )));
+  }
+  // And clear `owned:<addr>` for both sides so /holder pages refresh
+  // without waiting OWNED_TTL.
+  if (ctx && addrsToWipe.size) {
+    const addrs = [...addrsToWipe];
+    ctx.waitUntil(Promise.all(addrs.map(a =>
+      env.WALLET_CACHE.delete(`owned:${a}`).catch(() => {})
     )));
   }
   // Edge-cache purge for /api/preview/<tokenId>. Without this, OpenSea
