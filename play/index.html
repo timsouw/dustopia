@@ -21,6 +21,11 @@
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body {
     width:100%;
+    /* Belt to suspenders: even after the grid-track minmax(0,1fr)
+       fix, a stray child with explicit min-width could re-introduce
+       horizontal overflow. Clip it at the root so we never get the
+       "page is wider than viewport" effect on mobile. */
+    overflow-x: clip;
     background:#14141a; color:#e7e7ea;
     font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
     font-feature-settings: "ss01", "ss02";
@@ -290,9 +295,21 @@
   #player-view[hidden] { display:none; }
   @media (max-width: 880px) {
     #player-view {
-      grid-template-columns: 1fr;
+      /* minmax(0, 1fr): without the explicit min, a 1fr track defaults
+         to minmax(auto, 1fr) which won't shrink below the children's
+         max-content. A long collection name (or an iframe whose
+         intrinsic viewport is the full screen, as iOS Safari does for
+         <iframe>) was expanding the track past 100vw, leaving the
+         body horizontally scrollable with the picker count column
+         clipped at the right edge. */
+      grid-template-columns: minmax(0, 1fr);
       padding:14px 18px 36px;
     }
+    /* On mobile flip the visual order: sphere on top, picker below.
+       DOM order stays picker-first because that matches the desktop
+       two-column layout (picker on left). CSS `order` is enough. */
+    #player-view .player-side  { order: 2; }
+    #player-view .player-frame { order: 1; }
   }
 
   .player-side {
@@ -738,7 +755,15 @@
     } catch (e) {
       if (gen !== state.loadGen) return;
       console.warn('[play] load failed', e);
-      setStatus('couldn’t load this wallet — the sphere above still works.');
+      // If the stream got partway through before throwing, keep the
+      // picker rows visible — they're still selectable. The sphere
+      // iframe is independent and renders whatever it managed to
+      // fetch on its own.
+      if (totalNfts > 0) {
+        setStatus(`${totalNfts} tokens loaded · couldn’t fetch the rest`);
+      } else {
+        setStatus('couldn’t load this wallet — the sphere above still works.');
+      }
     }
   }
 

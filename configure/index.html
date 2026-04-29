@@ -850,7 +850,8 @@ function refreshSidebar() {
 const SPHERE_TOKEN_CAP = 1024;
 
 function renderSidebar() {
-  if (editor.loadError) {
+  // Hard error path: nothing loaded at all → just surface the message.
+  if (editor.loadError && !editor.collectionsList.length) {
     return `<div class="status-line err">load failed: ${esc(editor.loadError)}</div>`;
   }
   if (!editor.collectionsList.length) {
