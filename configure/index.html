@@ -577,37 +577,45 @@ async function fetchWithRetry(url, opts = {}) {
 }
 
 // Walk the wallet through /api/wallet (paginated). Aborts after MAX_PAGES.
-async function fetchEntireWallet(addr) {
-  const out = [];
+// Calls onPage(nfts, totalEstimate) after each page so callers can render
+// the picker progressively instead of staring at "loading wallet…" for
+// the full ~30 s walk on whale wallets.
+//
+// ?spam=include: the configurator deliberately surfaces every NFT
+// the address holds, including ones Alchemy auto-flags as spam.
+// CryptoPunks v1 + a bunch of older blue chips occasionally trip
+// their spam classifier — without this the holder would silently
+// not see them in the picker. The renderer's default "show all"
+// mode still hits /api/wallet without ?spam, so anonymous viewers
+// get the curated default.
+async function streamWallet(addr, onPage, isStale) {
   let pageKey = null;
   const MAX_PAGES = 60;
   for (let p = 0; p < MAX_PAGES; p++) {
-    // ?spam=include: the configurator deliberately surfaces every NFT
-    // the address holds, including ones Alchemy auto-flags as spam.
-    // CryptoPunks v1 + a bunch of older blue chips occasionally trip
-    // their spam classifier — without this the holder would silently
-    // not see them in the picker. The renderer's default "show all"
-    // mode still hits /api/wallet without ?spam, so anonymous viewers
-    // get the curated default.
     const u = new URL(`${API_URL}/api/wallet/${addr}`);
     u.searchParams.set('spam', 'include');
     if (pageKey) u.searchParams.set('pageKey', pageKey);
     const r = await fetchWithRetry(u);
     if (!r.ok) throw new Error(`wallet HTTP ${r.status}`);
     const j = await r.json();
-    if (Array.isArray(j.ownedNfts)) out.push(...j.ownedNfts);
+    if (isStale && isStale()) return;
+    onPage(Array.isArray(j.ownedNfts) ? j.ownedNfts : [],
+           typeof j.totalCount === 'number' ? j.totalCount : null);
     if (!j.pageKey) break;
     pageKey = j.pageKey;
   }
-  return out;
 }
 
-// Group NFTs by their contract address. Keeps the order in which they
-// first appear in the wallet response so the UI is stable across loads.
-// We DO NOT filter n.isSpam here — see fetchEntireWallet above for
-// rationale.
-function groupByCollection(nfts) {
-  const map = new Map();
+// Append `nfts` into an existing Map<contract, { contract, name, tokens }>.
+// Used by the progressive loader so each arriving wallet page extends the
+// picker in place without a re-render-from-scratch.
+//
+// We DO NOT filter n.isSpam here: the configurator deliberately surfaces
+// every NFT the address holds, including ones Alchemy auto-flags as spam
+// (CryptoPunks v1 + a bunch of older blue chips occasionally trip their
+// classifier). Without this the holder would silently not see them in
+// the picker.
+function appendPageToCollections(map, nfts) {
   for (const n of nfts) {
     if (!n || !n.contract || !n.contract.address) continue;
     const c = n.contract.address.toLowerCase();
@@ -622,7 +630,6 @@ function groupByCollection(nfts) {
     if (!row.tokenId) continue;
     map.get(c).tokens.push(row);
   }
-  return map;
 }
 
 // Pre-fill `selected` from the saved-config selection blob. Collections in
@@ -699,39 +706,73 @@ async function loadEditorData() {
   editor.expanded = new Set();
   editor.loadError = null;
   editor.totalNftsInWallet = 0;
+  editor.walletStreaming = false;
+  editor.walletEstimate = null;
   // Mount the editor shell with a placeholder iframe (no selection yet, so
   // the iframe boots against the saved config). We swap the iframe src once
   // we know the canonical hydrated selection — that's at most one extra
   // load total, and it only happens if the saved cfg differs from default.
   mountEditor();
+
+  // Loop tag so a stale streamWallet that wakes up after the user
+  // navigated away (different token, different wallet) self-aborts
+  // instead of writing into the now-detached editor state.
+  const myToken = editor.tokenId;
+  const myAddr  = state.address;
+  const isStale = () => editor.tokenId !== myToken || state.address !== myAddr;
+
   try {
-    const [cfgRes, walletNfts] = await Promise.all([
-      fetch(`${API_URL}/api/config/${editor.tokenId}`).then(r => r.ok ? r.json() : null),
-      fetchEntireWallet(state.address),
-    ]);
+    // Config first — it's a single GET and tells us the saved
+    // selection mode + per-token entries needed to hydrate every
+    // wallet page as it arrives.
+    const cfgRes = await fetch(`${API_URL}/api/config/${editor.tokenId}`).then(r => r.ok ? r.json() : null);
+    if (isStale()) return;
     editor.config = cfgRes || { tokenId: Number(editor.tokenId), selection: { mode: 'all', collections: [], tokens: [] } };
-    editor.totalNftsInWallet = walletNfts.length;
-    editor.byCollection = groupByCollection(walletNfts);
-    editor.collectionsList = sortedCollectionList();   // count-desc default
-    editor.mode = editor.config.selection?.mode === 'subset' ? 'subset' : 'all';
-    editor.selected = hydrateSelected(editor.byCollection, editor.config.selection);
+    editor.mode   = editor.config.selection?.mode === 'subset' ? 'subset' : 'all';
+
+    // Stream wallet page-by-page. Whales like cozomomedici.eth
+    // otherwise stare at "loading wallet…" for the full ~30 s walk;
+    // streaming makes the picker interactive in ~2 s for everyone,
+    // matching the small-wallet feel.
+    editor.walletStreaming = true;
+    let firstPaint = false;
+    await streamWallet(state.address, (pageNfts, totalEstimate) => {
+      editor.totalNftsInWallet += pageNfts.length;
+      if (totalEstimate != null) editor.walletEstimate = totalEstimate;
+      appendPageToCollections(editor.byCollection, pageNfts);
+      editor.collectionsList = sortedCollectionList();
+      // Re-hydrate against the now-larger wallet. hydrateSelected is
+      // O(byCollection.size) so per-page work is bounded; on a 500-NFT
+      // wallet it's ≤ 5 ms total amortised.
+      editor.selected = hydrateSelected(editor.byCollection, editor.config.selection);
+      if (!firstPaint) {
+        firstPaint = true;
+        editor.loading = false;
+      }
+      refreshSidebar();
+    }, isStale);
+    if (isStale()) return;
+    editor.walletStreaming = false;
   } catch (e) {
     console.warn('editor load failed', e);
     editor.loadError = e.message || 'load failed';
   } finally {
-    editor.loading = false;
-    refreshSidebar();
-    // Boot the iframe against the hydrated selection. If the saved cfg is
-    // the default mode='all', this does nothing visible — buildInitialPreviewSrc
-    // returned the same selection on mount. For non-default cfgs this swaps
-    // the src to the real subset, replacing the loading-state iframe.
-    const fr = $('#previewFrame');
-    if (fr) {
-      const newSrc = buildInitialPreviewSrc();
-      if (fr.src !== new URL(newSrc, location.href).toString()) {
-        editor.iframeStale = true;
-        $('#previewStale')?.classList.add('show');
-        fr.src = newSrc;
+    if (!isStale()) {
+      editor.loading = false;
+      editor.walletStreaming = false;
+      refreshSidebar();
+      // Boot the iframe against the hydrated selection. If the saved cfg is
+      // the default mode='all', this does nothing visible — buildInitialPreviewSrc
+      // returned the same selection on mount. For non-default cfgs this swaps
+      // the src to the real subset, replacing the loading-state iframe.
+      const fr = $('#previewFrame');
+      if (fr) {
+        const newSrc = buildInitialPreviewSrc();
+        if (fr.src !== new URL(newSrc, location.href).toString()) {
+          editor.iframeStale = true;
+          $('#previewStale')?.classList.add('show');
+          fr.src = newSrc;
+        }
       }
     }
   }
@@ -828,6 +869,12 @@ function renderSidebar() {
   const sortOpts = opts.map(o =>
     `<option value="${o.v}" ${editor.sortMode === o.v ? 'selected' : ''}>${o.t}</option>`
   ).join('');
+  // Streaming hint: while later wallet pages are still arriving the
+  // picker is technically incomplete — surface that so the holder
+  // knows new collections may still appear.
+  const streamHint = editor.walletStreaming
+    ? `<div class="status-line">loading more · ${editor.totalNftsInWallet}${editor.walletEstimate != null && editor.walletEstimate > editor.totalNftsInWallet ? ' / ~' + editor.walletEstimate : ''} so far</div>`
+    : '';
   return `
     ${capBanner}
     <div class="mode-toggle" id="modeToggle">
@@ -839,6 +886,7 @@ function renderSidebar() {
       <select id="sortSel">${sortOpts}</select>
     </div>
     <input type="text" class="search-input" id="searchInput" placeholder="Search collections / token name…" value="${esc(editor.searchQuery)}">
+    ${streamHint}
     <div class="tree-status" id="treeStatus">${treeStatusText()}</div>
     <div class="tree ${subsetActive ? '' : 'disabled'}" id="tree">${renderTree()}</div>
     <div class="save-bar">
