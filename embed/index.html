@@ -1137,110 +1137,11 @@ window.addEventListener('message', (e) => {
     }, 'image/png');
     return;
   }
-  // MP4 capture: parent /pfp asks for an N-second loop of the live sphere
-  // sized for Twitter (1080×1080 default). We tee the live GL canvas into
-  // an offscreen 2D canvas (so MediaRecorder gets a stable square stream)
-  // and pick the best mimeType the browser can actually record:
-  //   1. mp4/h264 — Safari, recent Chrome. Twitter's native fast-path.
-  //   2. webm/vp9 — Firefox + older Chrome. Twitter accepts but transcodes.
-  // Bitrate is sized to land under 15 MB (12 s × 7 Mbps ≈ 10.5 MB binary
-  // + container overhead). Caller can override duration / bitrate / size.
-  if (e.data.type === 'dustopia:mp4-capture') {
-    const stage = document.getElementById('stage');
-    if (!stage) {
-      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'no stage' }, e.origin);
-      return;
-    }
-    const opts = e.data || {};
-    const sizePx     = (typeof opts.size === 'number' && opts.size > 0)
-      ? Math.min(2160, Math.floor(opts.size)) : 1080;
-    const durationMs = (typeof opts.duration === 'number' && opts.duration > 0)
-      ? Math.min(30_000, Math.floor(opts.duration)) : 12_000;
-    const bitrate    = (typeof opts.bitrate === 'number' && opts.bitrate > 0)
-      ? Math.min(20_000_000, Math.floor(opts.bitrate)) : 7_000_000;
-    const fps        = 30;
-
-    const mimeCandidates = [
-      'video/mp4;codecs=avc1.42E01E',   // H.264 baseline, broadest Twitter compat
-      'video/mp4;codecs=avc1.4D401E',   // H.264 main
-      'video/mp4',
-      'video/webm;codecs=vp9',
-      'video/webm;codecs=vp8',
-      'video/webm',
-    ];
-    let mime = '';
-    for (const m of mimeCandidates) {
-      try { if (MediaRecorder.isTypeSupported(m)) { mime = m; break; } }
-      catch { /* isTypeSupported may throw on very old Safari */ }
-    }
-    if (!mime) {
-      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'no recordable mime' }, e.origin);
-      return;
-    }
-
-    // Off-screen square canvas. captureStream tracks what we draw here on
-    // every rAF tick; the live GL stage is the source. White fill behind
-    // in case the GL canvas isn't fully opaque on some frames.
-    const off = document.createElement('canvas');
-    off.width = off.height = sizePx;
-    const ctx = off.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, sizePx, sizePx);
-
-    let stream;
-    try { stream = off.captureStream(fps); }
-    catch (err) {
-      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'captureStream failed: ' + String(err && err.message || err) }, e.origin);
-      return;
-    }
-
-    let recorder;
-    try {
-      recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
-    } catch (err) {
-      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'recorder failed: ' + String(err && err.message || err) }, e.origin);
-      return;
-    }
-
-    const chunks = [];
-    recorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
-
-    let stopped = false;
-    function tick() {
-      if (stopped) return;
-      try {
-        const sw = stage.width, sh = stage.height;
-        const side = Math.min(sw, sh);
-        const sx = (sw - side) / 2;
-        const sy = (sh - side) / 2;
-        ctx.drawImage(stage, sx, sy, side, side, 0, 0, sizePx, sizePx);
-      } catch { /* one bad frame is recoverable */ }
-      requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
-
-    recorder.onstop = () => {
-      stopped = true;
-      // Free the captured tracks so we don't leak.
-      try { stream.getTracks().forEach(t => t.stop()); } catch {}
-      const blob = new Blob(chunks, { type: mime.split(';')[0] });
-      e.source?.postMessage({
-        type: 'dustopia:mp4-blob',
-        blob, mime: mime.split(';')[0], size: sizePx,
-        duration: durationMs,
-      }, e.origin);
-    };
-
-    try { recorder.start(); }
-    catch (err) {
-      stopped = true;
-      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'recorder.start: ' + String(err && err.message || err) }, e.origin);
-      return;
-    }
-    setTimeout(() => {
-      try { recorder.stop(); } catch {}
-    }, durationMs);
-  }
+  // MP4 capture lives inside main() now — see the dedicated handler
+  // there. It needs access to the live W / H / DPR / canvas so it can
+  // briefly resize the GL backbuffer to the recording target instead
+  // of teeing through a 2D wrapper canvas (the wrapper forced a
+  // GPU→CPU readback per frame, killing FPS and softening pixels).
 });
 
 // Fire-and-forget upload of a freshly-built atlas. Binary first (the
@@ -1691,6 +1592,124 @@ async function main() {
     if (!e.data || typeof e.data !== 'object') return;
     if (e.data.type !== 'dustopia:set-selection') return;
     applySelectionMask(e.data.selection);
+  });
+
+  // MP4 capture: parent /pfp asks for an N-second loop of the live sphere
+  // sized for Twitter (1080×1080 default). This handler lives inside
+  // main() so it can temporarily resize the GL canvas to the exact target
+  // resolution before recording — that lets us run captureStream on the
+  // live GL canvas directly (no GPU→CPU readback into a 2D wrapper, no
+  // upscale, no per-frame drawImage). Outcome: stable frame rate and
+  // sharp pixels where before we lost both to readback latency.
+  //
+  // Mime priority: H.264 first (Safari + recent Chrome — Twitter's
+  // native fast-path, no transcode), then VP9/8 fallback.
+  // Bitrate default 9 Mbps × 12 s ≈ 13.5 MB, just under the 15 MB
+  // Twitter API cap with overhead headroom. Caller can override
+  // duration / bitrate / size.
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin) return;
+    if (!e.data || typeof e.data !== 'object') return;
+    if (e.data.type !== 'dustopia:mp4-capture') return;
+
+    const opts       = e.data || {};
+    const sizePx     = (typeof opts.size === 'number' && opts.size > 0)
+      ? Math.min(2160, Math.floor(opts.size)) : 1080;
+    const durationMs = (typeof opts.duration === 'number' && opts.duration > 0)
+      ? Math.min(30_000, Math.floor(opts.duration)) : 12_000;
+    const bitrate    = (typeof opts.bitrate === 'number' && opts.bitrate > 0)
+      ? Math.min(20_000_000, Math.floor(opts.bitrate)) : 9_000_000;
+    const fps        = 30;
+
+    const mimeCandidates = [
+      'video/mp4;codecs=avc1.42E01E',
+      'video/mp4;codecs=avc1.4D401E',
+      'video/mp4',
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+    ];
+    let mime = '';
+    for (const m of mimeCandidates) {
+      try { if (MediaRecorder.isTypeSupported(m)) { mime = m; break; } }
+      catch { /* isTypeSupported may throw on very old Safari */ }
+    }
+    if (!mime) {
+      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'no recordable mime' }, e.origin);
+      return;
+    }
+
+    // Snapshot then lock the live canvas at sizePx². The render loop
+    // reads W / H / DPR / canvas.width each frame so the new size takes
+    // effect on the next rAF tick. CSS dimensions are left alone — the
+    // iframe display box stays put and the browser scales the 1080²
+    // backbuffer down for the user's eye while MediaRecorder samples
+    // the unscaled source.
+    const saved = {
+      W, H, DPR,
+      cssW: canvas.style.width,
+      cssH: canvas.style.height,
+    };
+    // Ignore native window resize events while we're locked at sizePx² —
+    // letting them fire would clobber the canvas size mid-recording.
+    const noopResize = () => {};
+    window.removeEventListener('resize', resize);
+    window.addEventListener('resize', noopResize);
+
+    W = sizePx; H = sizePx; DPR = 1;
+    canvas.width = sizePx; canvas.height = sizePx;
+
+    function restoreCanvas() {
+      window.removeEventListener('resize', noopResize);
+      window.addEventListener('resize', resize);
+      W = saved.W; H = saved.H; DPR = saved.DPR;
+      canvas.width = W * DPR; canvas.height = H * DPR;
+      canvas.style.width = saved.cssW;
+      canvas.style.height = saved.cssH;
+    }
+
+    let stream;
+    try { stream = canvas.captureStream(fps); }
+    catch (err) {
+      restoreCanvas();
+      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'captureStream failed: ' + String(err && err.message || err) }, e.origin);
+      return;
+    }
+
+    let recorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
+    } catch (err) {
+      try { stream.getTracks().forEach(t => t.stop()); } catch {}
+      restoreCanvas();
+      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'recorder failed: ' + String(err && err.message || err) }, e.origin);
+      return;
+    }
+
+    const chunks = [];
+    recorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+
+    recorder.onstop = () => {
+      try { stream.getTracks().forEach(t => t.stop()); } catch {}
+      restoreCanvas();
+      const blob = new Blob(chunks, { type: mime.split(';')[0] });
+      e.source?.postMessage({
+        type: 'dustopia:mp4-blob',
+        blob, mime: mime.split(';')[0], size: sizePx,
+        duration: durationMs,
+      }, e.origin);
+    };
+
+    try { recorder.start(); }
+    catch (err) {
+      try { stream.getTracks().forEach(t => t.stop()); } catch {}
+      restoreCanvas();
+      e.source?.postMessage({ type: 'dustopia:mp4-blob', error: 'recorder.start: ' + String(err && err.message || err) }, e.origin);
+      return;
+    }
+    setTimeout(() => {
+      try { recorder.stop(); } catch { restoreCanvas(); }
+    }, durationMs);
   });
 
   // =============================================================
