@@ -789,12 +789,20 @@
   // calling onPage(nfts, totalEstimate) after each page. Honours an
   // isStale() callback so the caller can short-circuit if the user moved
   // on to a different wallet mid-walk.
+  //
+  // The renderer caps at 1024 tokens, so paginating beyond ~1500 NFTs
+  // doesn't change the visible sphere — it only burns the worker's
+  // rate-limit budget (whales like cozomomedici.eth have ~44k NFTs and
+  // would walk hundreds of pages otherwise). MAX_PAGES = 20 leaves
+  // headroom for spam-filter drops while keeping the metadata phase to
+  // ~12 s on a hot worker.
+  //
   // ?spam=include surfaces flagged-by-Alchemy collections too — for the
   // playground we want the holder's full picture, same rationale as the
   // configurator.
   async function streamWallet(addr, onPage, isStale) {
     let pageKey = '';
-    const MAX_PAGES = 60;
+    const MAX_PAGES = 20;
     for (let p = 0; p < MAX_PAGES; p++) {
       const u = new URL(`${API_URL}/api/wallet/${addr}`);
       u.searchParams.set('spam', 'include');

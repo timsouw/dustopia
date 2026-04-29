@@ -581,6 +581,11 @@ async function fetchWithRetry(url, opts = {}) {
 // the picker progressively instead of staring at "loading wallet…" for
 // the full ~30 s walk on whale wallets.
 //
+// MAX_PAGES = 20 caps the walk at ~2000 NFTs. The renderer slices to
+// MAX_TOKENS=1024 anyway, so paginating beyond that doesn't change the
+// visible sphere. Whales like cozomomedici.eth have ~44k NFTs and used
+// to trip the worker's rate limit walking through them all.
+//
 // ?spam=include: the configurator deliberately surfaces every NFT
 // the address holds, including ones Alchemy auto-flags as spam.
 // CryptoPunks v1 + a bunch of older blue chips occasionally trip
@@ -590,7 +595,7 @@ async function fetchWithRetry(url, opts = {}) {
 // get the curated default.
 async function streamWallet(addr, onPage, isStale) {
   let pageKey = null;
-  const MAX_PAGES = 60;
+  const MAX_PAGES = 20;
   for (let p = 0; p < MAX_PAGES; p++) {
     const u = new URL(`${API_URL}/api/wallet/${addr}`);
     u.searchParams.set('spam', 'include');
