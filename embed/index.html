@@ -206,7 +206,7 @@
     // override instead of fetching the saved config. Atlas upload is also
     // skipped — we don't want preview drafts polluting R2 caches.
     if (params.get('preview') === '1') window.__dustopiaPreview = true;
-    // Playground mode: /play frames the embed with ?nocache=1 so random
+    // Explorer mode: /pfp frames the embed with ?nocache=1 so random
     // wallets people paste in don't pollute the R2 atlas / preview-cap
     // caches. Atlas upload + preview capture both gated on this below.
     if (params.get('nocache') === '1') window.__dustopiaNocache = true;
@@ -2732,7 +2732,7 @@ async function main() {
       setStatus(`<span class="ok">✓ ${ok} tokens</span>`);
       // Now that the atlas is fully populated with real thumbnails,
       // notify any embedding parent (the /configure preview iframe,
-      // /pfp page, /play playground). They've been waiting for this
+      // /pfp page). They've been waiting for this
       // signal to enable Download buttons / clear "updating" badges /
       // gate MP4 capture etc. We still gate to once-per-page so the
       // post is idempotent if grow() somehow resolves twice.
