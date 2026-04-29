@@ -383,7 +383,7 @@ const NFT_CONTRACT   = '0x8196e52111255d71732c2187F0F8420704417cE6';
 // Resilience anchor: the deploy wallet. Used when Alchemy can't tell us who
 // currently owns a token (network blip, key rotation race, etc.).
 const OWNER_FALLBACK = '0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf';
-const OWNER_TTL      = 5 * 60;  // KV TTL for owner lookups (seconds)
+const OWNER_TTL      = 24 * 60 * 60;  // 24h KV TTL — relies on the transfer webhook + handleConfigPut to invalidate on real changes; OpenSea / marketplace polling no longer eats KV writes
 const METADATA_TTL   = 60;      // Cache-Control: max-age on the JSON response
 
 function metadataResponse(body, request, init = {}) {
