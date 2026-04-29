@@ -692,15 +692,49 @@
       state.resolved = resolved;
 
       setStatus('fetching tokens…');
-      const nfts = await fetchEntireWallet(resolved);
-      if (gen !== state.loadGen) return;
+      // Page-by-page: render the picker as soon as page 1 lands, then
+      // grow the collection map as later pages arrive. Whales like
+      // cozomomedici.eth otherwise stare at "fetching tokens…" for the
+      // full ~30 s walk; this makes the picker interactive in ~2 s for
+      // everyone, matching the small-wallet feel.
+      const collMap = new Map();
+      let totalNfts = 0, totalEstimate = null, doneFirstPaint = false;
 
-      state.byCollection = groupByCollection(nfts);
-      // Default subset = everything, so flipping into "Pick subset" doesn't
-      // immediately wipe the sphere.
-      state.selected = new Set(state.byCollection.keys());
-      setStatus(`${nfts.length} tokens · ${state.byCollection.size} collections`);
-      renderCollList();
+      function ingestPage(pageNfts, pageEstimate) {
+        totalNfts += pageNfts.length;
+        if (pageEstimate != null) totalEstimate = pageEstimate;
+        for (const n of pageNfts) {
+          const c = ((n.contract && n.contract.address) || '').toLowerCase();
+          if (!/^0x[0-9a-f]{40}$/.test(c)) continue;
+          const name = (n.contract && (n.contract.openSeaMetadata?.collectionName
+                                      || n.contract.name)) || 'Untitled collection';
+          if (!collMap.has(c)) collMap.set(c, { name, count: 0 });
+          collMap.get(c).count += 1;
+        }
+        // First page: hand the map over to state and do a full render
+        // so the user sees something. Subsequent pages: same map ref,
+        // so all we need is a status refresh + a re-render to surface
+        // newly-arrived collections.
+        if (!doneFirstPaint) {
+          doneFirstPaint = true;
+          state.byCollection = collMap;
+          state.selected = new Set(collMap.keys());
+        } else {
+          // New collections might've appeared on this page. Auto-add
+          // them to the default-everything selection so the user
+          // doesn't have to manually re-tick.
+          for (const c of collMap.keys()) state.selected.add(c);
+        }
+        const ofTotal = totalEstimate != null && totalEstimate > totalNfts
+          ? `${totalNfts} / ~${totalEstimate}` : `${totalNfts}`;
+        setStatus(`${ofTotal} tokens · ${collMap.size} collections${totalEstimate != null && totalEstimate > totalNfts ? ' · loading…' : ''}`);
+        renderCollList();
+      }
+
+      await streamWallet(resolved, ingestPage, () => gen !== state.loadGen);
+      if (gen !== state.loadGen) return;
+      // Final status drops the "loading…" suffix.
+      setStatus(`${totalNfts} tokens · ${collMap.size} collections`);
     } catch (e) {
       if (gen !== state.loadGen) return;
       console.warn('[play] load failed', e);
@@ -751,12 +785,14 @@
     throw new Error('fetchWithRetry: unreachable');
   }
 
-  // Walk /api/wallet pages until pageKey runs out or we hit a sane cap.
+  // Walk /api/wallet pages until pageKey runs out or we hit a sane cap,
+  // calling onPage(nfts, totalEstimate) after each page. Honours an
+  // isStale() callback so the caller can short-circuit if the user moved
+  // on to a different wallet mid-walk.
   // ?spam=include surfaces flagged-by-Alchemy collections too — for the
   // playground we want the holder's full picture, same rationale as the
   // configurator.
-  async function fetchEntireWallet(addr) {
-    const out = [];
+  async function streamWallet(addr, onPage, isStale) {
     let pageKey = '';
     const MAX_PAGES = 60;
     for (let p = 0; p < MAX_PAGES; p++) {
@@ -766,26 +802,12 @@
       const r = await fetchWithRetry(u);
       if (!r.ok) throw new Error(`wallet HTTP ${r.status}`);
       const j = await r.json();
-      if (Array.isArray(j.ownedNfts)) out.push(...j.ownedNfts);
+      if (isStale && isStale()) return;
+      onPage(Array.isArray(j.ownedNfts) ? j.ownedNfts : [],
+             typeof j.totalCount === 'number' ? j.totalCount : null);
       if (!j.pageKey) break;
       pageKey = j.pageKey;
     }
-    return out;
-  }
-
-  // Map<contract, { name, count }> ordered by appearance. Empty/unknown
-  // contracts are skipped; that's the same hygiene the renderer applies.
-  function groupByCollection(nfts) {
-    const m = new Map();
-    for (const n of nfts) {
-      const c = ((n.contract && n.contract.address) || '').toLowerCase();
-      if (!/^0x[0-9a-f]{40}$/.test(c)) continue;
-      const name = (n.contract && (n.contract.openSeaMetadata?.collectionName
-                                  || n.contract.name)) || 'Untitled collection';
-      if (!m.has(c)) m.set(c, { name, count: 0 });
-      m.get(c).count += 1;
-    }
-    return m;
   }
 
   // ── Sidebar render ───────────────────────────────────────────
