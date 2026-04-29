@@ -1458,7 +1458,16 @@ export default {
       return handlePreview(previewMatch[1], request, env, ctx);
     }
 
-    if (!(await rateLimitOk(request, env))) {
+    // Per-IP rate limit. /api/wallet pagination continuations (those
+    // carrying a pageKey from a previous Alchemy response) bypass the
+    // counter — a whale's wallet can be 10-15 pages and each page is
+    // a separate frontend request, but they're all part of one user
+    // intent. Only the FIRST page (no pageKey) counts. Attackers
+    // can't fake a pageKey because Alchemy issues opaque ones; an
+    // invalid one returns 400 from upstream without burning quota.
+    const isPaginatedWallet = path.startsWith('/api/wallet/')
+                           && url.searchParams.get('pageKey');
+    if (!isPaginatedWallet && !(await rateLimitOk(request, env))) {
       return errorResponse(429, 'rate limit exceeded', request);
     }
 
