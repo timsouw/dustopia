@@ -220,7 +220,7 @@ hands. To activate:
 2. In Alchemy dashboard → Notify → "Address Activity" webhook
    - Network: Ethereum mainnet
    - URL: `https://api.dustopia.xyz/api/webhook/transfer`
-   - Addresses: `0x8196e52111255d71732c2187F0F8420704417cE6` (the Drops contract)
+   - Addresses: `0xFc2c97FFE6a6B85e3a0eaf15Aa395d1A6DcC1DFb` (Dustopia ERC-721)
    - Categories: `external`, `internal` aren't needed; activate ERC-721 transfers
 3. Copy the signing key shown after creation back into the secret.
 
