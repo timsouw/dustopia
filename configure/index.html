@@ -552,6 +552,30 @@ function asTokenRow(n) {
   return { tokenId: id, image: img, name: nm };
 }
 
+// Retry transient failures (429/5xx) with exponential backoff. The Worker's
+// per-IP rate limit can throttle paginated wallet walks for large holders;
+// a few backoff retries lets the bucket refill instead of failing the page.
+async function fetchWithRetry(url, opts = {}) {
+  const RETRIABLE = new Set([429, 500, 502, 503, 504]);
+  const TRIES = 4;
+  let delay = 1500;
+  for (let i = 0; i < TRIES; i++) {
+    let r;
+    try { r = await fetch(url, opts); }
+    catch (e) {
+      if (i === TRIES - 1) throw e;
+      await new Promise((res) => setTimeout(res, delay));
+      delay *= 2;
+      continue;
+    }
+    if (r.ok) return r;
+    if (!RETRIABLE.has(r.status) || i === TRIES - 1) return r;
+    await new Promise((res) => setTimeout(res, delay));
+    delay *= 2;
+  }
+  throw new Error('fetchWithRetry: unreachable');
+}
+
 // Walk the wallet through /api/wallet (paginated). Aborts after MAX_PAGES.
 async function fetchEntireWallet(addr) {
   const out = [];
@@ -568,7 +592,7 @@ async function fetchEntireWallet(addr) {
     const u = new URL(`${API_URL}/api/wallet/${addr}`);
     u.searchParams.set('spam', 'include');
     if (pageKey) u.searchParams.set('pageKey', pageKey);
-    const r = await fetch(u);
+    const r = await fetchWithRetry(u);
     if (!r.ok) throw new Error(`wallet HTTP ${r.status}`);
     const j = await r.json();
     if (Array.isArray(j.ownedNfts)) out.push(...j.ownedNfts);
