@@ -724,6 +724,33 @@
     return addr;
   }
 
+  // Plain fetch + retry-with-backoff for 429 / 5xx. Used by the
+  // wallet walker below — big wallets paginate into 10-15 separate
+  // requests and a single legit visitor can saturate the per-IP
+  // rate-limit on the Worker side. Retrying transient errors with
+  // exponential backoff lets the call eventually succeed instead of
+  // greeting the user with HTTP 429.
+  async function fetchWithRetry(url, opts = {}) {
+    const RETRIABLE = new Set([429, 500, 502, 503, 504]);
+    // Worker rate-limit is per-minute; the schedule below totals ~95s of
+    // backoff so a single retry storm spans a full bucket boundary even
+    // on the worst attempt timing.
+    const DELAYS = [3000, 8000, 20000, 60000];
+    for (let i = 0; i <= DELAYS.length; i++) {
+      let r;
+      try { r = await fetch(url, opts); }
+      catch (e) {
+        if (i === DELAYS.length) throw e;
+        await new Promise((res) => setTimeout(res, DELAYS[i]));
+        continue;
+      }
+      if (r.ok) return r;
+      if (!RETRIABLE.has(r.status) || i === DELAYS.length) return r;
+      await new Promise((res) => setTimeout(res, DELAYS[i]));
+    }
+    throw new Error('fetchWithRetry: unreachable');
+  }
+
   // Walk /api/wallet pages until pageKey runs out or we hit a sane cap.
   // ?spam=include surfaces flagged-by-Alchemy collections too — for the
   // playground we want the holder's full picture, same rationale as the
@@ -736,7 +763,7 @@
       const u = new URL(`${API_URL}/api/wallet/${addr}`);
       u.searchParams.set('spam', 'include');
       if (pageKey) u.searchParams.set('pageKey', pageKey);
-      const r = await fetch(u);
+      const r = await fetchWithRetry(u);
       if (!r.ok) throw new Error(`wallet HTTP ${r.status}`);
       const j = await r.json();
       if (Array.isArray(j.ownedNfts)) out.push(...j.ownedNfts);
