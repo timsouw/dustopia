@@ -377,9 +377,9 @@ async function handleAllTokens(request, env, ctx) {
 // any reason we fall back to OWNER_FALLBACK so the NFT keeps rendering
 // instead of breaking on transient outages.
 
-// OE drop contract on Ethereum mainnet (OpenSea Drops). When/if we add a
-// testnet contract too, this becomes a chain → address map.
-const NFT_CONTRACT   = '0x8196e52111255d71732c2187F0F8420704417cE6';
+// Dustopia ERC-721 on Ethereum mainnet. When/if we add a testnet contract
+// too, this becomes a chain → address map.
+const NFT_CONTRACT   = '0xFc2c97FFE6a6B85e3a0eaf15Aa395d1A6DcC1DFb';
 // Resilience anchor: the deploy wallet. Used when Alchemy can't tell us who
 // currently owns a token (network blip, key rotation race, etc.).
 const OWNER_FALLBACK = '0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf';
