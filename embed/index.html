@@ -2291,7 +2291,13 @@ async function main() {
     if (!dragging || activePointers.size > 1) return;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     totalMove += Math.hypot(dx, dy);
-    userYaw   += dx * 0.006;
+    // dx>0 means finger moved right. Natural feel = sphere rotates so
+    // the front face follows the finger (i.e. drag right → sphere
+    // visibly rotates right). The world rotation matrix in the shader
+    // is CW-from-above for positive yaw, which means dx>0 needs a
+    // SUBTRACT to push the front face rightward. (Earlier sign was
+    // backward and the user flagged it.)
+    userYaw   -= dx * 0.006;
     // dy>0 means finger moved down. Natural feel = sphere rotates so
     // the TOP tilts toward the viewer when you drag down (and away
     // when you drag up). Subtract dy so the rotation axis aligns with
@@ -2327,10 +2333,11 @@ async function main() {
       // two-finger swipe — orbit in the direction of finger motion.
       // Threshold keeps real mousewheel scrolls (integer steps ≥ 4 on most mice)
       // routed to zoom, while high-frequency trackpad events go to orbit.
-      // Sign on pitch matches the pointer handler above (deltaY > 0 =
-      // swipe down = top of sphere tilts toward viewer). Pitch is
-      // unbounded; sphere wraps freely past ±90°.
-      userYaw   += e.deltaX * 0.004;
+      // Both signs match the pointer handler above (deltaX > 0 = swipe
+      // right = sphere visibly rotates right; deltaY > 0 = swipe down =
+      // top of sphere tilts toward viewer). Pitch is unbounded; sphere
+      // wraps freely past ±90°.
+      userYaw   -= e.deltaX * 0.004;
       userPitch -= e.deltaY * 0.004;
     } else {
       // traditional mouse wheel — zoom
