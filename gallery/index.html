@@ -37,7 +37,7 @@
   }
   body.light .label { color:#71717a; }
 
-  /* Header — matches landing/holder/play */
+  /* Header — matches landing/holder/pfp */
   header {
     position:sticky; top:0; z-index:50;
     background:rgba(20,20,26,.72);
@@ -378,7 +378,6 @@
     <nav class="nav-links" aria-label="primary">
       <a href="/#how" class="nav-link">how it works</a>
       <a href="/pfp" class="nav-link">save as pfp</a>
-      <a href="/play" class="nav-link">play</a>
       <a href="/configure" class="nav-link">configure</a>
       <a href="/gallery" class="nav-link current">gallery</a>
       <a href="/leaderboard" class="nav-link">leaderboard</a>
@@ -481,7 +480,7 @@
     document.getElementById('grid').innerHTML = `
       <div class="empty-state">
         No Dustopias have been minted yet.<br>
-        <a href="/play" class="cta">Try the playground →</a>
+        <a href="/pfp" class="cta">Try the explorer →</a>
       </div>`;
   }
 

@@ -76,7 +76,7 @@ and reload.** `node_modules/` exists only because viem ships from npm.
 - **Landing**: <https://dustopia.xyz>
 - **Sphere**: <https://dustopia.xyz/embed/<addr>>
 - **Configurator** (holders): <https://dustopia.xyz/configure/<tokenId>>
-- **Playground**: <https://dustopia.xyz/play>
+- **Explorer / save as PFP**: <https://dustopia.xyz/pfp>
 - **API**: <https://api.dustopia.xyz/api/health> → returns `{"ok":true}`
 - **Pages preview**: <https://dustopia.pages.dev>
 
