@@ -18,23 +18,30 @@
   /* ── Header ─────────────────────────────────────────────────── */
   header {
     position:sticky; top:0; z-index:50;
-    display:flex; align-items:center;
-    padding:14px 22px;
-    background:rgba(20,20,26,.78); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    background:rgba(20,20,26,.72);
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
     border-bottom:1px solid rgba(255,255,255,.06);
   }
-  body.light header { background:rgba(244,244,245,.86); border-color:rgba(0,0,0,.08); }
-  .brand { font-size:13px; letter-spacing:.04em; }
-  .brand strong { font-weight:600; }
-  .brand .sep { opacity:.4; margin:0 8px; }
-  .brand .crumb { color:#9a9aa5; }
-  body.light .brand .crumb { color:#71717a; }
-
-  /* Global nav — kept in sync with landing/play/pfp/gallery so the
-     same set of section links appears on every page. The /configure
-     header used to skip these because it was the oldest layout in
-     the repo. */
-  .nav-links { display:flex; align-items:center; gap:6px; margin:0 16px 0 24px; }
+  body.light header {
+    background:rgba(244,244,245,.78);
+    border-bottom-color:rgba(0,0,0,.06);
+  }
+  header .bar {
+    display:flex; align-items:center;
+    height:54px; max-width:1180px; margin:0 auto; padding:0 24px;
+  }
+  .brand {
+    display:flex; align-items:center; gap:10px;
+    font-size:14px; font-weight:600; letter-spacing:-0.01em;
+  }
+  .brand-mark {
+    width:18px; height:18px; border-radius:50%;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a'/></radialGradient><clipPath id='c'><circle cx='32' cy='32' r='28'/></clipPath></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/><g clip-path='url(%23c)' fill='none' stroke='%23ffffff' stroke-linecap='round'><ellipse cx='32' cy='32' rx='28' ry='8' stroke-opacity='0.7' stroke-width='2.8' transform='rotate(-22 32 32)'/><ellipse cx='32' cy='32' rx='28' ry='4' stroke-opacity='0.45' stroke-width='1.8' transform='rotate(38 32 32)'/></g></svg>");
+    background-size:cover;
+    flex-shrink:0;
+  }
+  .nav-links { display:flex; align-items:center; gap:6px; }
   .nav-link {
     padding:6px 12px; border-radius:6px;
     font-size:12px; letter-spacing:.02em; color:#9a9aa5;
@@ -45,11 +52,56 @@
   body.light .nav-link:hover { color:#18181b; background:rgba(0,0,0,.04); }
   .nav-link.current { color:#e7e7ea; background:rgba(255,255,255,.06); }
   body.light .nav-link.current { color:#18181b; background:rgba(0,0,0,.05); }
-  @media (max-width: 880px) {
-    .nav-links { display:none; }
+
+  .icon-btn {
+    background:transparent; border:1px solid rgba(255,255,255,.14);
+    color:inherit; cursor:pointer;
+    width:30px; height:30px; border-radius:7px;
+    display:inline-flex; align-items:center; justify-content:center;
+    transition:border-color 120ms;
+    margin-left:6px;
+  }
+  .icon-btn:hover { border-color:rgba(255,255,255,.4); }
+  body.light .icon-btn { border-color:rgba(0,0,0,.14); }
+  body.light .icon-btn:hover { border-color:rgba(0,0,0,.4); }
+  .icon-btn svg { width:14px; height:14px; }
+  .bar-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+  @media (min-width: 721px) {
+    .nav-links { margin-left:auto; }
+    .bar-actions { margin-left:0; margin-left:16px; }
+  }
+  .nav-toggle {
+    display:none;
+    background:transparent; border:0;
+    color:inherit; cursor:pointer;
+    width:30px; height:30px; padding:0;
+    margin-left:6px;
+  }
+  .nav-toggle svg { width:16px; height:16px; }
+  @media (max-width: 720px) {
+    .nav-toggle { display:inline-flex; align-items:center; justify-content:center; }
+    .nav-links .nav-link { display:none; }
+    body.nav-open .nav-links {
+      position:absolute; top:54px; left:0; right:0;
+      flex-direction:column; gap:0; align-items:stretch;
+      background:rgba(20,20,26,.96);
+      backdrop-filter:blur(14px) saturate(140%);
+      -webkit-backdrop-filter:blur(14px) saturate(140%);
+      padding:8px 0;
+      border-bottom:1px solid rgba(255,255,255,.08);
+    }
+    body.light.nav-open .nav-links {
+      background:rgba(244,244,245,.96);
+      border-bottom-color:rgba(0,0,0,.08);
+    }
+    body.nav-open .nav-link {
+      display:block;
+      padding:14px 24px;
+      border-radius:0;
+      font-size:14px;
+    }
   }
 
-  .head-actions { display:flex; gap:8px; align-items:center; margin-left:auto; }
   .btn {
     background:transparent; border:1px solid rgba(255,255,255,.18); color:#e7e7ea;
     font-family:inherit; font-size:11px; letter-spacing:.04em;
@@ -325,27 +377,35 @@
 <body class="light">
 
 <header>
-  <div class="brand">
-    <a href="/"><strong>dustopia</strong></a>
-    <span class="sep">/</span>
-    <span class="crumb" id="crumb">configure</span>
-  </div>
-  <nav class="nav-links" aria-label="primary">
-    <a href="/#how" class="nav-link">how it works</a>
-    <a href="/pfp" class="nav-link">save as pfp</a>
-    <a href="/play" class="nav-link">play</a>
-    <a href="/configure" class="nav-link current">configure</a>
-    <a href="/gallery" class="nav-link">gallery</a>
-    <a href="/leaderboard" class="nav-link">leaderboard</a>
-  </nav>
-  <div class="head-actions">
-    <button id="themeBtn" class="btn" title="toggle theme">☾ Dark</button>
-    <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
-    <div id="walletPill" class="wallet-pill hidden">
-      <span class="dot"></span>
-      <span class="name" id="walletProviderName"></span>
-      <span id="addrShort">0x…</span>
-      <button id="disconnectBtn" class="btn" style="padding:2px 8px; font-size:10px;">×</button>
+  <div class="bar">
+    <a href="/" class="brand" aria-label="dustopia home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>dustopia</span>
+    </a>
+    <nav class="nav-links" aria-label="primary">
+      <a href="/#how" class="nav-link">how it works</a>
+      <a href="/pfp" class="nav-link">save as pfp</a>
+      <a href="/play" class="nav-link">play</a>
+      <a href="/configure" class="nav-link current">configure</a>
+      <a href="/gallery" class="nav-link">gallery</a>
+      <a href="/leaderboard" class="nav-link">leaderboard</a>
+    </nav>
+    <div class="bar-actions">
+      <button id="themeBtn" class="icon-btn" type="button" aria-label="toggle theme" title="toggle theme"></button>
+      <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
+      <div id="walletPill" class="wallet-pill hidden">
+        <span class="dot"></span>
+        <span class="name" id="walletProviderName"></span>
+        <span id="addrShort">0x…</span>
+        <button id="disconnectBtn" class="btn" style="padding:2px 8px; font-size:10px;">×</button>
+      </div>
+      <button id="navToggle" class="nav-toggle" type="button" aria-label="toggle menu" title="menu">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <rect x="2" y="3.25" width="12" height="1.5" rx="0.75"/>
+          <rect x="2" y="7.25" width="12" height="1.5" rx="0.75"/>
+          <rect x="2" y="11.25" width="12" height="1.5" rx="0.75"/>
+        </svg>
+      </button>
     </div>
   </div>
 </header>
@@ -432,12 +492,20 @@ function esc(s)        {
 }
 
 // ── Theme toggle (mirrors main site) ───────────────────────────
+const sunSvg = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 0v3M8 13v3M0 8h3M13 8h3M2.3 2.3l2.1 2.1M11.6 11.6l2.1 2.1M2.3 13.7l2.1-2.1M11.6 4.4l2.1-2.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+$('#themeBtn').innerHTML = sunSvg;
 $('#themeBtn').addEventListener('click', () => {
   const isLight = document.body.classList.toggle('light');
   safeStorage.set('franken-theme', isLight ? 'light' : 'dark');
-  $('#themeBtn').textContent = isLight ? '☾ Dark' : '☀ Light';
 });
-$('#themeBtn').textContent = document.body.classList.contains('light') ? '☾ Dark' : '☀ Light';
+// Mobile hamburger
+(function() {
+  const t = document.getElementById('navToggle');
+  if (t) t.addEventListener('click', () => document.body.classList.toggle('nav-open'));
+  document.querySelectorAll('.nav-links .nav-link').forEach(a =>
+    a.addEventListener('click', () => document.body.classList.remove('nav-open'))
+  );
+})();
 
 // ── Routing ───────────────────────────────────────────────────
 // Path-based: /configure → list, /configure/<id> → editor.
@@ -456,7 +524,6 @@ window.addEventListener('popstate', render);
 function render() {
   const route = parseRoute();
   state.tokenId = route.kind === 'editor' ? route.tokenId : null;
-  setText('#crumb', route.kind === 'editor' ? `configure / #${route.tokenId}` : 'configure');
 
   // Leaving the editor view? Cancel any pending preview-push debounce so
   // it doesn't fire after the iframe is gone (would no-op on null #ifr,
