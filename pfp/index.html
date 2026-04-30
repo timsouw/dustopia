@@ -394,7 +394,7 @@
       <p>First-time builds for unseen wallets take 1–3 minutes (we have to fetch every NFT thumbnail and stitch them into an atlas). Once the sphere stops jittering, pick a format.</p>
       <div class="status" id="pfpStatus"></div>
       <button class="dl-btn" id="dlBtn" type="button" disabled>PNG · 4096×4096 <span class="arrow">↓</span></button>
-      <button class="dl-btn dl-btn-secondary" id="dlMp4Btn" type="button" disabled>MP4 · 1080×1080 · 12 s <span class="arrow">↓</span></button>
+      <button class="dl-btn dl-btn-secondary" id="dlMp4Btn" type="button" disabled>MP4 · 2160×2160 · 12 s <span class="arrow">↓</span></button>
       <p class="mp4-note">MP4 is sized for Twitter (≤ 15 MB). PNG is the still avatar.</p>
       <p class="mono" id="addrEcho" style="font-size:11px"></p>
     </aside>
@@ -578,10 +578,13 @@
 
   document.getElementById('dlBtn').addEventListener('click', downloadPng);
 
-  // MP4 download. Asks the iframe for a 12 s 1080×1080 H.264 recording,
-  // ~7 Mbps to land under Twitter's 15 MB limit (12 × 7 / 8 ≈ 10.5 MB
-  // binary + container overhead). Disables both download buttons during
-  // the record + ticks a countdown in the status line.
+  // MP4 download. Asks the iframe for a 12 s 2160×2160 H.264 recording.
+  // Bitrate stays at ~7 Mbps so the file lands ~10.5 MB (still well
+  // under Twitter's 15 MB API cap) — yes, that's a higher effective
+  // CRF than 1080p at the same bitrate, but viewers downsampling to
+  // their phone screen perceive supersampled motion as smoother than
+  // sharper-but-blockier 1080p. Trade-off is on purpose. Disables both
+  // download buttons during the record + ticks a countdown.
   function downloadMp4() {
     const fr = document.getElementById('pfpFrame');
     if (!fr || !fr.contentWindow || !currentAddr) return;
@@ -637,7 +640,7 @@
     }, dur + 8_000);
 
     fr.contentWindow.postMessage(
-      { type: 'dustopia:mp4-capture', size: 1080, duration: dur, bitrate: 7_000_000 },
+      { type: 'dustopia:mp4-capture', size: 2160, duration: dur, bitrate: 7_000_000 },
       location.origin
     );
   }
