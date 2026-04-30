@@ -1116,53 +1116,12 @@ window.addEventListener('message', (e) => {
     tryCaptureAndUploadPreview(addr, { force: true }).catch(() => {});
     return;
   }
-  // PFP capture: parent /pfp page asks for a 2000×2000 white-bg PNG of
-  // the current sphere. We render the live stage onto a square offscreen
-  // canvas (white fill behind in case the GL canvas isn't fully opaque)
-  // and post the resulting Blob back via structured clone. Parent turns
-  // it into a download link. Defaults to 2000 px but accepts an override
-  // via e.data.size for callers that want different dimensions.
-  if (e.data.type === 'dustopia:pfp-capture') {
-    const stage = document.getElementById('stage');
-    if (!stage) {
-      e.source?.postMessage({ type: 'dustopia:pfp-blob', error: 'no stage' }, e.origin);
-      return;
-    }
-    const size = (typeof e.data.size === 'number' && e.data.size > 0)
-      ? Math.min(4096, Math.floor(e.data.size))
-      : 2000;
-    const off = document.createElement('canvas');
-    off.width = off.height = size;
-    const ctx = off.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, size, size);
-    try {
-      // Centre-crop the (likely non-square) live canvas into the square
-      // PFP canvas. Pick the shorter side of the source so we don't
-      // letterbox or warp the sphere.
-      const sw = stage.width, sh = stage.height;
-      const side = Math.min(sw, sh);
-      const sx = (sw - side) / 2;
-      const sy = (sh - side) / 2;
-      ctx.drawImage(stage, sx, sy, side, side, 0, 0, size, size);
-    } catch (err) {
-      e.source?.postMessage({ type: 'dustopia:pfp-blob', error: String(err && err.message || err) }, e.origin);
-      return;
-    }
-    off.toBlob((blob) => {
-      if (!blob) {
-        e.source?.postMessage({ type: 'dustopia:pfp-blob', error: 'toBlob null' }, e.origin);
-        return;
-      }
-      e.source?.postMessage({ type: 'dustopia:pfp-blob', blob, size }, e.origin);
-    }, 'image/png');
-    return;
-  }
-  // MP4 capture lives inside main() now — see the dedicated handler
-  // there. It needs access to the live W / H / DPR / canvas so it can
-  // briefly resize the GL backbuffer to the recording target instead
-  // of teeing through a 2D wrapper canvas (the wrapper forced a
-  // GPU→CPU readback per frame, killing FPS and softening pixels).
+  // PFP + MP4 captures live inside main() — they need access to the
+  // live W / H / DPR / canvas so they can briefly resize the GL
+  // backbuffer to the exact target size before capture. The previous
+  // PFP path teed through an offscreen 2D canvas + drawImage and lost
+  // sharpness on the downscale; both now sample the GL canvas at native
+  // capture resolution.
 });
 
 // Fire-and-forget upload of a freshly-built atlas. Binary first (the
@@ -1654,6 +1613,65 @@ async function main() {
     if (!e.data || typeof e.data !== 'object') return;
     if (e.data.type !== 'dustopia:set-selection') return;
     applySelectionMask(e.data.selection);
+  });
+
+  // PFP capture — single-frame PNG snapshot at the requested resolution
+  // (default 4096²). Lives here so it can lock the GL canvas at the
+  // exact target size and read pixels straight off the WebGL
+  // backbuffer; the old offscreen-2D + drawImage path scaled down a
+  // ~2400 px source into the 2000² destination, costing sharpness on
+  // every export. CSS dimensions stay unchanged so the iframe display
+  // box doesn't twitch.
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin) return;
+    if (!e.data || typeof e.data !== 'object') return;
+    if (e.data.type !== 'dustopia:pfp-capture') return;
+
+    const size = (typeof e.data.size === 'number' && e.data.size > 0)
+      ? Math.min(4096, Math.floor(e.data.size))
+      : 4096;
+
+    const saved = {
+      W, H, DPR,
+      cssW: canvas.style.width,
+      cssH: canvas.style.height,
+    };
+    const noopResize = () => {};
+    window.removeEventListener('resize', resize);
+    window.addEventListener('resize', noopResize);
+    W = size; H = size; DPR = 1;
+    canvas.width = size; canvas.height = size;
+
+    function restoreCanvas() {
+      window.removeEventListener('resize', noopResize);
+      window.addEventListener('resize', resize);
+      W = saved.W; H = saved.H; DPR = saved.DPR;
+      canvas.width = W * DPR; canvas.height = H * DPR;
+      canvas.style.width = saved.cssW;
+      canvas.style.height = saved.cssH;
+    }
+
+    // The render loop reads canvas dimensions every frame, but the
+    // first rAF after a resize occasionally lands on a half-applied
+    // viewport. Wait two ticks so the new size has fully propagated
+    // through the position/forward textures before sampling.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          canvas.toBlob((blob) => {
+            restoreCanvas();
+            if (!blob) {
+              e.source?.postMessage({ type: 'dustopia:pfp-blob', error: 'toBlob null' }, e.origin);
+              return;
+            }
+            e.source?.postMessage({ type: 'dustopia:pfp-blob', blob, size }, e.origin);
+          }, 'image/png');
+        } catch (err) {
+          restoreCanvas();
+          e.source?.postMessage({ type: 'dustopia:pfp-blob', error: String(err && err.message || err) }, e.origin);
+        }
+      });
+    });
   });
 
   // MP4 capture: parent /pfp asks for an N-second loop of the live sphere
