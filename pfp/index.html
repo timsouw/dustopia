@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pfp · dustopia</title>
-<meta name="description" content="Generate a 2000×2000 dustopia sphere from any Ethereum wallet. Use it as your Twitter, Telegram or Discord avatar.">
+<meta name="description" content="Generate a 4096×4096 dustopia sphere from any Ethereum wallet. Use it as your Twitter, Telegram or Discord avatar.">
 
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://dustopia.xyz/pfp">
 <meta property="og:title" content="dustopia · save as pfp">
-<meta property="og:description" content="Generate a 2000×2000 sphere of your wallet's NFTs. PNG for the avatar, MP4 for the loop.">
+<meta property="og:description" content="Generate a 4096×4096 sphere of your wallet's NFTs. PNG for the avatar, MP4 for the loop.">
 <meta property="og:image" content="https://api.dustopia.xyz/api/preview/1">
 <meta property="og:image:width" content="1080">
 <meta property="og:image:height" content="1080">
@@ -17,7 +17,7 @@
 <meta property="og:site_name" content="dustopia">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="dustopia · save as pfp">
-<meta name="twitter:description" content="Generate a 2000×2000 sphere of your wallet's NFTs.">
+<meta name="twitter:description" content="Generate a 4096×4096 sphere of your wallet's NFTs.">
 <meta name="twitter:image" content="https://api.dustopia.xyz/api/preview/1">
 
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a'/></radialGradient><clipPath id='c'><circle cx='32' cy='32' r='28'/></clipPath></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/><g clip-path='url(%23c)' fill='none' stroke='%23ffffff' stroke-linecap='round'><ellipse cx='32' cy='32' rx='28' ry='8' stroke-opacity='0.7' stroke-width='2.8' transform='rotate(-22 32 32)'/><ellipse cx='32' cy='32' rx='28' ry='4' stroke-opacity='0.45' stroke-width='1.8' transform='rotate(38 32 32)'/></g></svg>">
@@ -364,7 +364,7 @@
 <main class="wrap">
   <section class="pfp-head">
     <h1>Your wallet, as a PFP.</h1>
-    <p>Drop in any Ethereum address or ENS name and download a 2000×2000 PNG of the sphere on a clean white background. Use it as your Twitter, Telegram or Discord avatar.</p>
+    <p>Drop in any Ethereum address or ENS name and download a 4096×4096 PNG of the sphere on a clean white background. Use it as your Twitter, Telegram or Discord avatar.</p>
   </section>
 
   <form class="form-row" id="goForm" autocomplete="off">
@@ -393,7 +393,7 @@
       <h2>Download</h2>
       <p>First-time builds for unseen wallets take 1–3 minutes (we have to fetch every NFT thumbnail and stitch them into an atlas). Once the sphere stops jittering, pick a format.</p>
       <div class="status" id="pfpStatus"></div>
-      <button class="dl-btn" id="dlBtn" type="button" disabled>PNG · 2000×2000 <span class="arrow">↓</span></button>
+      <button class="dl-btn" id="dlBtn" type="button" disabled>PNG · 4096×4096 <span class="arrow">↓</span></button>
       <button class="dl-btn dl-btn-secondary" id="dlMp4Btn" type="button" disabled>MP4 · 1080×1080 · 12 s <span class="arrow">↓</span></button>
       <p class="mp4-note">MP4 is sized for Twitter (≤ 15 MB). PNG is the still avatar.</p>
       <p class="mono" id="addrEcho" style="font-size:11px"></p>
@@ -456,7 +456,7 @@
     return false;
   }
 
-  const PFP_SIZE = 2000;     // final PNG dimensions (also forwarded to iframe via postMessage)
+  const PFP_SIZE = 4096;     // final PNG dimensions (also forwarded to iframe via postMessage)
   let currentAddr = null;
   let frameReady  = false;
 
@@ -507,7 +507,7 @@
   function downloadPng() {
     const fr = document.getElementById('pfpFrame');
     if (!fr || !fr.contentWindow || !currentAddr) return;
-    setStatus('@spin capturing 2000×2000…');
+    setStatus('@spin capturing 4096×4096…');
     document.getElementById('dlBtn').disabled = true;
     document.getElementById('dlMp4Btn').disabled = true;
 
