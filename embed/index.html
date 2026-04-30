@@ -306,14 +306,16 @@ const _GRID_OVERRIDE = (typeof window !== 'undefined' && (() => {
   } catch { return null; }
 })()) || null;
 
-// Per-particle size multiplier. 1.0 = production default, 0.125 = 8×
-// smaller (the user-requested floor — "восемь раз меньше"). Allowlist:
-// 0.125, 0.25, 0.5, 0.75, 1.0, 1.5. Doesn't change flock packing —
-// only the gl_PointSize sprite size in the shader.
+// Per-particle size multiplier. 1.0 = production default; lower
+// values shrink the sprite WITHOUT changing the swarm spacing, so
+// the texture starts to show gaps. Range clamped to 0.05..3.0:
+// below 0.05 the sphere is invisible, above 3.0 the GL_POINT_SIZE
+// limit kicks in on most drivers anyway.
 const _SIZE_MUL_OVERRIDE = (typeof window !== 'undefined' && (() => {
   try {
     const v = parseFloat(new URLSearchParams(location.search).get('ps'));
-    return [0.125, 0.25, 0.5, 0.75, 1.0, 1.5].includes(v) ? v : null;
+    if (!Number.isFinite(v)) return null;
+    return Math.max(0.05, Math.min(3.0, v));
   } catch { return null; }
 })()) || 1.0;
 

@@ -191,12 +191,14 @@
 
     <span class="controls-label">size</span>
     <div class="grid-pick" id="sizePick">
+      <button data-ps="auto" class="active">auto</button>
       <button data-ps="0.125">⅛×</button>
       <button data-ps="0.25">¼×</button>
       <button data-ps="0.5">½×</button>
       <button data-ps="0.75">¾×</button>
-      <button data-ps="1" class="active">1×</button>
+      <button data-ps="1">1×</button>
       <button data-ps="1.5">1.5×</button>
+      <button data-ps="2">2×</button>
     </div>
 
     <input id="addrInput" class="addr-input" type="text"
@@ -209,7 +211,8 @@
   <div class="stats" id="stats">
     <span><b id="statGrid">128</b><sup>2</sup> particles per token</span>
     <span><b id="statTotal">8 388 608</b> particles total at MAX_TOKENS=512</span>
-    <span>particle size <b id="statSize">1×</b></span>
+    <span>size <b id="statSize">1.5×</b></span>
+    <span>coverage vs prod <b id="statDensity">100%</b></span>
   </div>
 
   <div class="frame">
@@ -217,11 +220,14 @@
   </div>
 
   <p class="hint">
-    Lower <code>grid</code> → fewer particles → higher FPS, but visible "dust"
-    grain at small token counts. Renderer caps at <code>MAX_TOKENS=512</code>
-    so the worst-case load is <code>grid² × 512</code>: 128² × 512 = 8.4 M
-    particles, 192² × 512 = 18.9 M. The current production default is
-    192² (desktop) / 128² (mobile + landing).
+    <b>grid</b> = particles per token side; <b>size</b> = visual footprint of
+    each particle. They're independent: spacing in the swarm comes from
+    grid only, so shrinking size at fixed grid leaves see-through gaps
+    between particles. <b>auto</b> ties size to grid so coverage matches
+    the production default (192² × 1×) at any density.
+    <br><br>
+    <b>coverage vs prod</b> shows how solid the sphere reads relative to
+    192² × 1× = 100%. Below ~70% the sphere starts looking dusty / grainy.
   </p>
 </main>
 
@@ -246,34 +252,58 @@
     else                  document.body.classList.add('light');
   })();
 
-  const fr        = document.getElementById('testFrame');
-  const addrInput = document.getElementById('addrInput');
-  const reloadBtn = document.getElementById('reloadBtn');
-  const gridPick  = document.getElementById('gridPick');
-  const sizePick  = document.getElementById('sizePick');
-  const statGrid  = document.getElementById('statGrid');
-  const statTotal = document.getElementById('statTotal');
-  const statSize  = document.getElementById('statSize');
+  const fr           = document.getElementById('testFrame');
+  const addrInput    = document.getElementById('addrInput');
+  const reloadBtn    = document.getElementById('reloadBtn');
+  const gridPick     = document.getElementById('gridPick');
+  const sizePick     = document.getElementById('sizePick');
+  const statGrid     = document.getElementById('statGrid');
+  const statTotal    = document.getElementById('statTotal');
+  const statSize     = document.getElementById('statSize');
+  const statDensity  = document.getElementById('statDensity');
 
-  let currentGrid = 128;
-  let currentSize = 1.0;
+  // Production reference: 192² × 1× particle size. Coverage stat uses
+  // this as the 100% baseline.
+  const PROD_GRID = 192;
+  const PROD_SIZE = 1.0;
+
+  let currentGrid    = 128;
+  let sizeMode       = 'auto';   // 'auto' or one of the manual values
+  let manualSize     = 1.0;      // last manual size pick
 
   function fmt(n) {
     return n.toLocaleString('en-US').replace(/,/g, ' ');
   }
 
+  function effectiveSize() {
+    if (sizeMode !== 'auto') return manualSize;
+    // Auto: keep visual coverage equivalent to PROD_GRID × PROD_SIZE.
+    // Coverage scales with grid² × size², so size² ∝ 1/grid² → size = PROD_GRID / grid.
+    // Clamp so we don't ask the GL driver for absurd point sizes.
+    return Math.max(0.05, Math.min(3.0, PROD_GRID / currentGrid));
+  }
+
+  function sizeLabel(v) {
+    if (sizeMode === 'auto') return `auto (${v.toFixed(2)}×)`;
+    if (v === 0.125) return '⅛×';
+    if (v === 0.25)  return '¼×';
+    if (v === 0.5)   return '½×';
+    if (v === 0.75)  return '¾×';
+    if (v === 1)     return '1×';
+    if (v === 1.5)   return '1.5×';
+    if (v === 2)     return '2×';
+    return `${v}×`;
+  }
+
   function applyStats() {
+    const s = effectiveSize();
     statGrid.textContent = currentGrid;
     statTotal.textContent = fmt(currentGrid * currentGrid * 512);
-    // Pretty-print common fractions, fall back to decimal.
-    const sizeLabel = currentSize === 0.125 ? '⅛×'
-                    : currentSize === 0.25  ? '¼×'
-                    : currentSize === 0.5   ? '½×'
-                    : currentSize === 0.75  ? '¾×'
-                    : currentSize === 1     ? '1×'
-                    : currentSize === 1.5   ? '1.5×'
-                    : `${currentSize}×`;
-    statSize.textContent = sizeLabel;
+    statSize.textContent = sizeLabel(s);
+    // Coverage = (grid² × size²) / (PROD_GRID² × PROD_SIZE²)
+    const cov = ((currentGrid * currentGrid * s * s) /
+                 (PROD_GRID * PROD_GRID * PROD_SIZE * PROD_SIZE)) * 100;
+    statDensity.textContent = `${Math.round(cov)}%`;
   }
 
   // nocache=1 keeps test renders out of the R2 atlas / preview-cap cache.
@@ -285,7 +315,7 @@
     if (!addr) return '';
     const u = new URL(`/embed/${encodeURIComponent(addr)}`, location.href);
     u.searchParams.set('grid', String(currentGrid));
-    u.searchParams.set('ps', String(currentSize));
+    u.searchParams.set('ps', effectiveSize().toFixed(3));
     u.searchParams.set('nocache', '1');
     u.searchParams.set('t', String(Date.now()));
     return u.toString();
@@ -313,9 +343,14 @@
   sizePick.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-ps]');
     if (!btn) return;
-    const v = parseFloat(btn.dataset.ps);
-    if (!Number.isFinite(v)) return;
-    currentSize = v;
+    if (btn.dataset.ps === 'auto') {
+      sizeMode = 'auto';
+    } else {
+      const v = parseFloat(btn.dataset.ps);
+      if (!Number.isFinite(v)) return;
+      sizeMode = 'manual';
+      manualSize = v;
+    }
     for (const b of sizePick.querySelectorAll('button')) {
       b.classList.toggle('active', b.dataset.ps === btn.dataset.ps);
     }
