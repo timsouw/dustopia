@@ -465,50 +465,59 @@ async function lookupOwner(tokenId, env) {
 // most marketplace SVG sanitizers — we'll know within a day whether OpenSea
 // preserves it. Per-token hue + rotation phase keeps each tile distinct so
 // the grid reads as a curated set rather than a wall of clones.
-function previewSvg(tokenId) {
-  const id    = parseInt(tokenId, 10) || 0;
-  const hue   = (id * 47) % 360;
-  const phase = (id * 13) % 360;
-  const dots  = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map(deg => {
-    const rad = deg * Math.PI / 180;
-    const x = (Math.cos(rad) * 230).toFixed(1);
-    const y = (Math.sin(rad) * 230).toFixed(1);
-    const dotHue = (hue + deg) % 360;
-    const begin  = (deg / 360 * 3).toFixed(2);
-    return `<circle cx="${x}" cy="${y}" r="3" fill="hsl(${dotHue},70%,75%)"><animate attributeName="opacity" values="0.15;1;0.15" dur="3s" begin="${begin}s" repeatCount="indefinite"/></circle>`;
-  }).join('');
+// Static SVG fallback served when no captured WebP exists in R2 yet
+// (or for unminted tokens). Style matches our brand: streaked sphere
+// over dark bg, with token-specific procedural variation so a cold
+// gallery still reads as 300 distinct items, not 300 placeholders.
+//
+// Drops the previous SMIL animations — Safari (iOS especially) silently
+// fails to render <animate>/<animateTransform> when the SVG is loaded
+// directly into an <img>, which is exactly how OpenSea + our own
+// gallery use it. Static is universally rendered.
+function previewSvg(tokenId, summary, ownerShort) {
+  const id     = parseInt(tokenId, 10) || 0;
+  const hue    = (id * 47) % 360;
+  // Streak count + per-streak rotation/oblateness derived from id so
+  // every token has a fingerprint. 3..6 streaks; below 3 the sphere
+  // looks naked, above 6 it gets too busy at thumbnail size.
+  const nStreaks = 3 + (Math.abs(id * 7)  % 4);
+  const streaks = [];
+  for (let i = 0; i < nStreaks; i++) {
+    const angle    = (id * 17 + i * 53) % 360;
+    const ry       = 20 + (Math.abs(id * 13 + i * 11) % 110);   // 20..130
+    const opacity  = (i % 2 === 0) ? 0.62 : 0.35;
+    const stroke   = (i % 2 === 0) ? 3.2  : 1.8;
+    streaks.push(
+      `<ellipse cx="0" cy="0" rx="200" ry="${ry}" stroke-opacity="${opacity}" stroke-width="${stroke}" transform="rotate(${angle})"/>`
+    );
+  }
+  // Subtitle: stats if known, otherwise the brand line.
+  const subtitle = (summary && typeof summary.tokens === 'number' && typeof summary.collections === 'number')
+    ? `${summary.tokens.toLocaleString('en-US')} NFTs · ${summary.collections} collections`
+    : 'living wallet portrait';
+  const ownerLine = (typeof ownerShort === 'string' && ownerShort)
+    ? ownerShort
+    : '';
+
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" preserveAspectRatio="xMidYMid meet">
   <defs>
-    <radialGradient id="g${id}" cx="38%" cy="32%" r="65%">
-      <stop offset="0%"   stop-color="hsl(${hue},80%,90%)" stop-opacity="0.95"/>
-      <stop offset="35%"  stop-color="hsl(${(hue + 30) % 360},65%,68%)" stop-opacity="0.85"/>
-      <stop offset="70%"  stop-color="hsl(${(hue + 60) % 360},55%,38%)" stop-opacity="0.7"/>
-      <stop offset="100%" stop-color="#0a0a12" stop-opacity="0.95"/>
+    <radialGradient id="g${id}" cx="38%" cy="32%" r="68%">
+      <stop offset="0%"   stop-color="hsl(${hue},85%,92%)"/>
+      <stop offset="32%"  stop-color="hsl(${(hue + 30) % 360},70%,72%)"/>
+      <stop offset="65%"  stop-color="hsl(${(hue + 60) % 360},60%,42%)"/>
+      <stop offset="100%" stop-color="#0a0a14"/>
     </radialGradient>
+    <clipPath id="c${id}"><circle cx="400" cy="380" r="200"/></clipPath>
   </defs>
   <rect width="800" height="800" fill="#14141a"/>
-  <circle cx="400" cy="400" r="240" fill="url(#g${id})">
-    <animate attributeName="opacity" values="0.55;0.85;0.55" dur="5s" repeatCount="indefinite"/>
-    <animate attributeName="r" values="220;255;220" dur="6s" repeatCount="indefinite"/>
-  </circle>
-  <g transform="translate(400 400)">
-    <g fill="none" stroke="#3a3a44" stroke-width="1.2">
-      <animateTransform attributeName="transform" type="rotate" from="${phase}" to="${phase + 360}" dur="24s" repeatCount="indefinite"/>
-      <ellipse rx="220" ry="220"/>
-      <ellipse rx="220" ry="160"/>
-      <ellipse rx="220" ry="100"/>
-      <ellipse rx="220" ry="40"/>
-      <ellipse rx="40"  ry="220"/>
-      <ellipse rx="100" ry="220"/>
-      <ellipse rx="160" ry="220"/>
-    </g>
-    <g>
-      <animateTransform attributeName="transform" type="rotate" from="0" to="-360" dur="32s" repeatCount="indefinite"/>
-      ${dots}
-    </g>
+  <text x="60" y="76" font-family="-apple-system,Helvetica,sans-serif" font-size="13" letter-spacing="0.22em" fill="#9a9aa5">DUSTOPIA</text>
+  <circle cx="400" cy="380" r="200" fill="url(#g${id})"/>
+  <g clip-path="url(#c${id})" transform="translate(400 380)" fill="none" stroke="#ffffff" stroke-linecap="round">
+    ${streaks.join('\n    ')}
   </g>
-  <text x="400" y="700" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="24" fill="#9a9aa5" letter-spacing="0.08em">Dustopia #${tokenId}</text>
-  <text x="400" y="730" text-anchor="middle" font-family="-apple-system,Helvetica,sans-serif" font-size="13" fill="#55555e" letter-spacing="0.04em">live wallet portrait -- open to view</text>
+  <text x="60" y="700" font-family="-apple-system,Helvetica,sans-serif" font-size="44" font-weight="500" fill="#fafafa" letter-spacing="-0.015em">Dustopia #${tokenId}</text>
+  <text x="60" y="730" font-family="-apple-system,Helvetica,sans-serif" font-size="15" fill="#9a9aa5" letter-spacing="0.02em">${subtitle}</text>
+  ${ownerLine ? `<text x="60" y="755" font-family="ui-monospace,Menlo,monospace" font-size="13" fill="#55555e" letter-spacing="0.04em">${ownerLine}</text>` : ''}
 </svg>`;
 }
 
@@ -561,13 +570,16 @@ async function handlePreview(rawTokenId, request, env, ctx) {
     return resp;
   }
 
-  // No captured preview yet — serve the animated SVG so marketplace grids at
-  // least show something living until the first /embed visitor seeds R2.
-  // We deliberately DO NOT edge-cache this response: holders saving a new
-  // selection delete preview/<addr>.bin and rely on the next /embed visit
-  // re-uploading. If we cached the SVG here, that fresh upload would be
-  // shadowed by the cached SVG until max-age expired.
-  const svg = previewSvg(tokenId);
+  // No captured preview yet — serve the procedural SVG so marketplace
+  // grids show a per-token fingerprint (different streaks + hue per id)
+  // plus a wallet stats line if we have an atlas-meta cached for the
+  // current owner. We deliberately DO NOT edge-cache this response:
+  // holders saving a new selection delete preview/<addr>.bin and rely
+  // on the next /embed visit re-uploading. If we cached the SVG here
+  // that fresh upload would be shadowed until max-age expired.
+  const summary = await readOwnerSummary(owner, env).catch(() => null);
+  const ownerShort = `${owner.slice(0, 6)}…${owner.slice(-4)}`;
+  const svg = previewSvg(tokenId, summary, ownerShort);
   return new Response(svg, {
     headers: {
       'Content-Type':                'image/svg+xml; charset=utf-8',
