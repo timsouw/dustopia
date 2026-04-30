@@ -1699,16 +1699,13 @@ async function main() {
     });
   });
 
-  // MP4 capture: parent /pfp asks for an N-second loop of the live
-  // sphere. Default 2160² — supersampled relative to a typical 1080p
-  // playback target, so motion stays smoother on downsample than a
-  // sharper-but-blockier 1080p source at the same bitrate would. This
-  // handler lives inside main() so it can temporarily resize the GL
-  // canvas to the exact target resolution before recording — that
-  // lets us run captureStream on the live GL canvas directly (no
-  // GPU→CPU readback into a 2D wrapper, no upscale, no per-frame
-  // drawImage). Outcome: stable frame rate and sharp pixels where
-  // before we lost both to readback latency.
+  // MP4 capture: parent /pfp asks for an N-second loop of the live sphere
+  // sized for Twitter (1080×1080 default). This handler lives inside
+  // main() so it can temporarily resize the GL canvas to the exact target
+  // resolution before recording — that lets us run captureStream on the
+  // live GL canvas directly (no GPU→CPU readback into a 2D wrapper, no
+  // upscale, no per-frame drawImage). Outcome: stable frame rate and
+  // sharp pixels where before we lost both to readback latency.
   //
   // Mime priority: H.264 first (Safari + recent Chrome — Twitter's
   // native fast-path, no transcode), then VP9/8 fallback.
@@ -1722,7 +1719,7 @@ async function main() {
 
     const opts       = e.data || {};
     const sizePx     = (typeof opts.size === 'number' && opts.size > 0)
-      ? Math.min(2160, Math.floor(opts.size)) : 2160;
+      ? Math.min(2160, Math.floor(opts.size)) : 1080;
     const durationMs = (typeof opts.duration === 'number' && opts.duration > 0)
       ? Math.min(30_000, Math.floor(opts.duration)) : 12_000;
     const bitrate    = (typeof opts.bitrate === 'number' && opts.bitrate > 0)
