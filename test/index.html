@@ -189,6 +189,16 @@
       <button data-grid="192">192²</button>
     </div>
 
+    <span class="controls-label">size</span>
+    <div class="grid-pick" id="sizePick">
+      <button data-ps="0.125">⅛×</button>
+      <button data-ps="0.25">¼×</button>
+      <button data-ps="0.5">½×</button>
+      <button data-ps="0.75">¾×</button>
+      <button data-ps="1" class="active">1×</button>
+      <button data-ps="1.5">1.5×</button>
+    </div>
+
     <input id="addrInput" class="addr-input" type="text"
       value="0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf"
       placeholder="0x… or vitalik.eth" autocomplete="off" spellcheck="false">
@@ -199,6 +209,7 @@
   <div class="stats" id="stats">
     <span><b id="statGrid">128</b><sup>2</sup> particles per token</span>
     <span><b id="statTotal">8 388 608</b> particles total at MAX_TOKENS=512</span>
+    <span>particle size <b id="statSize">1×</b></span>
   </div>
 
   <div class="frame">
@@ -238,19 +249,31 @@
   const fr        = document.getElementById('testFrame');
   const addrInput = document.getElementById('addrInput');
   const reloadBtn = document.getElementById('reloadBtn');
-  const pick      = document.getElementById('gridPick');
+  const gridPick  = document.getElementById('gridPick');
+  const sizePick  = document.getElementById('sizePick');
   const statGrid  = document.getElementById('statGrid');
   const statTotal = document.getElementById('statTotal');
+  const statSize  = document.getElementById('statSize');
 
   let currentGrid = 128;
+  let currentSize = 1.0;
 
   function fmt(n) {
     return n.toLocaleString('en-US').replace(/,/g, ' ');
   }
 
-  function applyStats(g) {
-    statGrid.textContent = g;
-    statTotal.textContent = fmt(g * g * 512);
+  function applyStats() {
+    statGrid.textContent = currentGrid;
+    statTotal.textContent = fmt(currentGrid * currentGrid * 512);
+    // Pretty-print common fractions, fall back to decimal.
+    const sizeLabel = currentSize === 0.125 ? '⅛×'
+                    : currentSize === 0.25  ? '¼×'
+                    : currentSize === 0.5   ? '½×'
+                    : currentSize === 0.75  ? '¾×'
+                    : currentSize === 1     ? '1×'
+                    : currentSize === 1.5   ? '1.5×'
+                    : `${currentSize}×`;
+    statSize.textContent = sizeLabel;
   }
 
   // nocache=1 keeps test renders out of the R2 atlas / preview-cap cache.
@@ -262,6 +285,7 @@
     if (!addr) return '';
     const u = new URL(`/embed/${encodeURIComponent(addr)}`, location.href);
     u.searchParams.set('grid', String(currentGrid));
+    u.searchParams.set('ps', String(currentSize));
     u.searchParams.set('nocache', '1');
     u.searchParams.set('t', String(Date.now()));
     return u.toString();
@@ -273,23 +297,36 @@
     fr.src = src;
   }
 
-  pick.addEventListener('click', (e) => {
+  gridPick.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-grid]');
     if (!btn) return;
     const g = parseInt(btn.dataset.grid, 10);
     if (!Number.isFinite(g)) return;
     currentGrid = g;
-    for (const b of pick.querySelectorAll('button')) {
+    for (const b of gridPick.querySelectorAll('button')) {
       b.classList.toggle('active', b.dataset.grid === btn.dataset.grid);
     }
-    applyStats(g);
+    applyStats();
+    reload();
+  });
+
+  sizePick.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-ps]');
+    if (!btn) return;
+    const v = parseFloat(btn.dataset.ps);
+    if (!Number.isFinite(v)) return;
+    currentSize = v;
+    for (const b of sizePick.querySelectorAll('button')) {
+      b.classList.toggle('active', b.dataset.ps === btn.dataset.ps);
+    }
+    applyStats();
     reload();
   });
 
   reloadBtn.addEventListener('click', reload);
   addrInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') reload(); });
 
-  applyStats(currentGrid);
+  applyStats();
   reload();
 </script>
 
