@@ -409,17 +409,18 @@ if (!DEBUG) { const f = document.getElementById('fps'); if (f) f.style.display =
 // calls — useful for local testing before the Worker is deployed.
 const API_URL      = 'https://api.dustopia.xyz';
 const ALCH_PAGE    = 100;
-// Renderer caps at MAX_TOKENS=1024 (256 in landing) — once we have that
-// many candidates extra pages just feed slice() and burn rate-limit
-// budget. 14 pages × 100/page = 1400, comfortably above the cap with
-// room for spam / no-image filter drops. Whales like cozomomedici.eth
-// (~44k NFTs) used to walk all 60 pages and trip the worker's per-IP
-// rate limit; the cap keeps the metadata phase to ~10 s for everyone.
-const ALCH_MAX_PAG = 14;
+// Renderer caps at MAX_TOKENS=512 — at the previous 1024 the per-frame
+// particle count was 37 M (1024 × 192²) and FPS dropped on average GPUs.
+// 512 halves it to 18 M without losing visual density. With the cap at
+// 512 we only need ~6-7 pages worth of NFTs even after spam-filter
+// drops, so trimmed ALCH_MAX_PAG to 8. Keeps the metadata phase to
+// ~6-8 s and stays well clear of the worker's per-IP rate limit even
+// for a whale.
+const ALCH_MAX_PAG = 8;
 const LIVE_TILE    = GRID;           // matches GRID — desktop 192×192, mobile 128×128 (atlas size scales with GRID²)
 const FETCH_CONC   = 12;
 const FETCH_TIMEOUT= 12000;
-const MAX_TOKENS   = LANDING_MODE ? 256 : 1024;   // safety ceiling for live render perf; landing trims for hero memory
+const MAX_TOKENS   = LANDING_MODE ? 256 : 512;   // safety ceiling for live render perf; landing trims for hero memory
 
 const statusEl = () => document.getElementById('status');
 function setStatus(html) {
@@ -1174,6 +1175,42 @@ async function uploadAtlas(addr, meta, atlasBlob, fp) {
   } catch (e) { dwarn('atlas upload err', e); }
 }
 
+// Pick `cap` NFTs from `candidates` while maximising collection diversity.
+// Round-robin: take the first NFT from every collection, then the second
+// from every collection, etc., until we hit `cap` (or every collection is
+// exhausted). A wallet with 5 000 NFTs where 500 are punks + the rest
+// scattered across 50 other collections used to render as 500 punks +
+// 12 stragglers; now it renders ~10 from each of 51 collections, giving
+// the sphere a much wider visual range.
+//
+// Small wallets (≤ cap) and homogeneous wallets (one collection) are
+// untouched — they degenerate to the original ordering.
+function diverseSlice(candidates, cap) {
+  if (candidates.length <= cap) return candidates.slice();
+  const byContract = new Map();
+  for (const c of candidates) {
+    const key = (c.nft.contract && c.nft.contract.address || '').toLowerCase();
+    let arr = byContract.get(key);
+    if (!arr) { arr = []; byContract.set(key, arr); }
+    arr.push(c);
+  }
+  const out = [];
+  let depth = 0;
+  let progressed = true;
+  while (out.length < cap && progressed) {
+    progressed = false;
+    for (const arr of byContract.values()) {
+      if (depth < arr.length) {
+        out.push(arr[depth]);
+        progressed = true;
+        if (out.length >= cap) break;
+      }
+    }
+    depth++;
+  }
+  return out;
+}
+
 async function buildLiveData(input) {
   // Progress milestones used by the embed-mode loader. The fill of the
   // "loading" word is bumped to each milestone as the build advances.
@@ -1279,9 +1316,9 @@ async function buildLiveData(input) {
   }
   if (!candidates.length) throw new Error('no renderable NFTs in wallet');
   if (candidates.length > MAX_TOKENS) {
-    console.warn(`wallet has ${candidates.length} NFTs; rendering first ${MAX_TOKENS}`);
+    console.warn(`wallet has ${candidates.length} NFTs; sampling ${MAX_TOKENS} for diversity`);
   }
-  const used = candidates.slice(0, MAX_TOKENS);
+  const used = diverseSlice(candidates, MAX_TOKENS);
 
   // Progressive build: instead of awaiting every thumbnail before the
   // first paint, allocate a grey-filled skeleton atlas right now and
