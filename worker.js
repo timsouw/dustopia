@@ -114,7 +114,7 @@ async function upstreamFetch(url, attempts = 3) {
 // can't smuggle path-traversal or huge values into our cache key.
 const PAGE_KEY_RE = /^[A-Za-z0-9_=:.\-]{1,512}$/;
 
-async function handleWallet(address, pageKey, includeSpam, request, env) {
+async function handleWallet(address, pageKey, includeSpam, bust, request, env) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
     return errorResponse(400, 'invalid address', request);
   }
@@ -128,10 +128,14 @@ async function handleWallet(address, pageKey, includeSpam, request, env) {
   // would set the cache and the other would silently get the wrong shape.
   const cacheKey = `wallet:${addrLower}:${pageKey || ''}:${includeSpam ? 'all' : 'clean'}`;
 
-  // Try KV cache first
-  const cached = await env.WALLET_CACHE.get(cacheKey);
-  if (cached) {
-    return jsonResponse(cached, request, { headers: { 'X-Cache': 'HIT' } });
+  // Try KV cache first — unless the caller asked for a fresh fetch.
+  // /configure's "Refresh sphere" sets ?bust=1 so a newly-bought NFT
+  // isn't masked by the WALLET_TTL on-disk cache.
+  if (!bust) {
+    const cached = await env.WALLET_CACHE.get(cacheKey);
+    if (cached) {
+      return jsonResponse(cached, request, { headers: { 'X-Cache': 'HIT' } });
+    }
   }
 
   // Cache miss → upstream
@@ -1028,9 +1032,7 @@ async function handleAtlas(addr, request, env, ctx) {
 // PER-TOKEN CONFIG — stored in R2 under config/<tokenId>.json. Owner-gated
 // PUT (verified via EIP-191 personal_sign) lets the holder pick which of
 // their NFTs go into the sphere; without a config the renderer falls back
-// to "show everything in the wallet". A separate Alchemy Notify webhook
-// hits /api/webhook/transfer to wipe the config when the token changes
-// hands, so a new owner never inherits the previous owner's selection.
+// to "show everything in the wallet".
 //
 // Config schema (all fields required):
 //   {
@@ -1224,10 +1226,6 @@ async function handleConfig(rawTokenId, request, env, ctx) {
   }
   if (request.method === 'GET')    return handleConfigGet(tokenId, request, env);
   if (request.method === 'PUT')    return handleConfigPut(tokenId, request, env, ctx);
-  if (request.method === 'DELETE') {
-    // Internal-only via webhook; reject direct calls to avoid griefing.
-    return errorResponse(405, 'use /api/webhook/transfer', request);
-  }
   return errorResponse(405, 'method not allowed', request);
 }
 
@@ -1259,120 +1257,6 @@ async function fetchOwnerFresh(tokenId, env) {
   return owner;
 }
 
-// =====================================================================
-// ALCHEMY WEBHOOK — receives Transfer events from our NFT contract and
-// wipes the per-token config so the new owner doesn't inherit the old
-// owner's selection. Authenticated by HMAC-SHA256 over the raw body using
-// the signing key Alchemy gives us at webhook creation time. Stored as a
-// Worker secret WEBHOOK_SECRET (set via `wrangler secret put`).
-// =====================================================================
-
-async function verifyAlchemySignature(rawBody, signatureHex, secret) {
-  if (!secret || typeof signatureHex !== 'string' || !/^[0-9a-f]{64}$/i.test(signatureHex)) return false;
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(rawBody));
-  const computed = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-  // Constant-time-ish compare.
-  if (computed.length !== signatureHex.length) return false;
-  let diff = 0;
-  for (let i = 0; i < computed.length; i++) {
-    diff |= computed.charCodeAt(i) ^ signatureHex.toLowerCase().charCodeAt(i);
-  }
-  return diff === 0;
-}
-
-async function handleWebhookTransfer(request, env, ctx) {
-  if (request.method !== 'POST') return errorResponse(405, 'method not allowed', request);
-  const sigHeader = request.headers.get('X-Alchemy-Signature') || '';
-  // Read body as text so we can both HMAC-verify and JSON-parse it.
-  const rawBody = await request.text();
-  if (rawBody.length > CONFIG_MAX_BYTES * 4) {
-    return errorResponse(413, 'webhook body too large', request);
-  }
-  if (!env.WEBHOOK_SECRET) {
-    return errorResponse(500, 'WEBHOOK_SECRET not configured', request);
-  }
-  const ok = await verifyAlchemySignature(rawBody, sigHeader, env.WEBHOOK_SECRET);
-  if (!ok) return errorResponse(401, 'bad webhook signature', request);
-
-  let body;
-  try { body = JSON.parse(rawBody); }
-  catch { return errorResponse(400, 'webhook body is not JSON', request); }
-
-  // Alchemy Address Activity webhook payload (v3 format) carries an array of
-  // activity items under event.activity. We only care about ERC-721
-  // transfers from our NFT contract — extract their tokenIds and DELETE
-  // the corresponding config keys. Format may evolve; we defend by
-  // checking each field's shape rather than assuming structure.
-  const activities = (body && body.event && Array.isArray(body.event.activity))
-    ? body.event.activity : [];
-  const tokenIds = new Set();
-  // Track from + to addresses too — we use them to wipe the owned-cache
-  // entries (`owned:<addr>` / list of dustopia tokens that addr holds)
-  // for both sides of the transfer. Without this the /holder page for
-  // either party stays stale up to OWNED_TTL.
-  const addrsToWipe = new Set();
-  for (const act of activities) {
-    if (!act || typeof act !== 'object') continue;
-    if ((act.category || '').toLowerCase() !== 'erc721') continue;
-    const contract = (act.rawContract && act.rawContract.address) || act.contractAddress || '';
-    if (typeof contract !== 'string' || contract.toLowerCase() !== NFT_CONTRACT.toLowerCase()) continue;
-    // Token id arrives as hex string ("0x1") in some payloads, decimal in others.
-    const idRaw = act.erc721TokenId || (act.rawContract && act.rawContract.tokenId) || act.tokenId;
-    if (typeof idRaw !== 'string') continue;
-    let idDec;
-    try {
-      idDec = idRaw.startsWith('0x') ? BigInt(idRaw).toString(10) : BigInt(idRaw).toString(10);
-    } catch { continue; }
-    if (!/^\d+$/.test(idDec) || idDec.length > 78) continue;
-    tokenIds.add(idDec);
-    const fromA = (act.fromAddress || '').toLowerCase();
-    const toA   = (act.toAddress   || '').toLowerCase();
-    if (/^0x[0-9a-f]{40}$/.test(fromA)) addrsToWipe.add(fromA);
-    if (/^0x[0-9a-f]{40}$/.test(toA))   addrsToWipe.add(toA);
-  }
-  if (!tokenIds.size) return jsonResponse({ ok: true, cleared: 0 }, request);
-
-  const ids = [...tokenIds];
-  // Fire-and-forget the deletes via waitUntil so we ack the webhook fast
-  // (Alchemy retries on slow responses).
-  if (ctx) {
-    ctx.waitUntil(Promise.all(ids.map(id => env.ATLAS.delete(configKey(id)).catch(() => {}))));
-  } else {
-    await Promise.all(ids.map(id => env.ATLAS.delete(configKey(id)).catch(() => {})));
-  }
-  // Also clear the per-token owner KV cache so the next metadata fetch
-  // sees the new owner immediately (without waiting OWNER_TTL).
-  if (ctx) {
-    ctx.waitUntil(Promise.all(ids.map(id =>
-      env.WALLET_CACHE.delete(`owner:${NFT_CONTRACT.toLowerCase()}:${id}`).catch(() => {})
-    )));
-  }
-  // And clear `owned:<addr>` for both sides so /holder pages refresh
-  // without waiting OWNED_TTL.
-  if (ctx && addrsToWipe.size) {
-    const addrs = [...addrsToWipe];
-    ctx.waitUntil(Promise.all(addrs.map(a =>
-      env.WALLET_CACHE.delete(`owned:${a}`).catch(() => {})
-    )));
-  }
-  // Edge-cache purge for /api/preview/<tokenId>. Without this, OpenSea
-  // and the landing keep serving the old owner's preview WebP for up
-  // to max-age (5 min) even though the underlying R2 entry is now
-  // pointing at the new owner. Per-colo purge — propagates as other
-  // colos see fresh requests.
-  if (ctx) {
-    const baseUrl = new URL(request.url);
-    ctx.waitUntil(Promise.all(ids.map((id) => {
-      const u = new URL(`/api/preview/${id}`, baseUrl.origin);
-      return caches.default.delete(new Request(u.toString())).catch(() => {});
-    })));
-  }
-  return jsonResponse({ ok: true, cleared: ids.length, tokenIds: ids }, request);
-}
 
 export default {
   async fetch(request, env, ctx) {
@@ -1420,15 +1304,6 @@ export default {
       return handleConfig(configMatch[1], request, env, ctx);
     }
 
-    // Alchemy webhook: HMAC-authed POST that fires on any Transfer event of
-    // our NFT contract. We use it to wipe the per-token config so the new
-    // owner never inherits the prior owner's selection. POST-only by design.
-    if (path === '/api/webhook/transfer') {
-      // Webhook traffic is bounded by Alchemy's retry policy and HMAC-gated,
-      // so it's exempt from per-IP rate limiting (Alchemy's IP would burn
-      // the bucket on a deploy that triggers a backlog).
-      return handleWebhookTransfer(request, env, ctx);
-    }
 
     if (request.method !== 'GET') {
       return errorResponse(405, 'method not allowed', request);
@@ -1475,7 +1350,8 @@ export default {
     const walletMatch = path.match(/^\/api\/wallet\/([^/]+)\/?$/);
     if (walletMatch) {
       const includeSpam = url.searchParams.get('spam') === 'include';
-      return handleWallet(walletMatch[1], url.searchParams.get('pageKey') || '', includeSpam, request, env);
+      const bust        = url.searchParams.get('bust') === '1';
+      return handleWallet(walletMatch[1], url.searchParams.get('pageKey') || '', includeSpam, bust, request, env);
     }
 
     // /api/ens/<name>
