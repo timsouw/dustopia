@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dust test · dustopia</title>
+<meta name="description" content="A/B different particle densities on the live sphere without touching the production renderer.">
+<meta name="robots" content="noindex,nofollow">
+
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a'/></radialGradient><clipPath id='c'><circle cx='32' cy='32' r='28'/></clipPath></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/><g clip-path='url(%23c)' fill='none' stroke='%23ffffff' stroke-linecap='round'><ellipse cx='32' cy='32' rx='28' ry='8' stroke-opacity='0.7' stroke-width='2.8' transform='rotate(-22 32 32)'/><ellipse cx='32' cy='32' rx='28' ry='4' stroke-opacity='0.45' stroke-width='1.8' transform='rotate(38 32 32)'/></g></svg>">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; min-height:100vh;
+    background:#14141a; color:#e7e7ea;
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  body.light { background:#f4f4f5; color:#18181b; }
+  a { color:inherit; text-decoration:none; }
+
+  header {
+    position:sticky; top:0; z-index:50;
+    background:rgba(20,20,26,.72);
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  body.light header {
+    background:rgba(244,244,245,.78);
+    border-bottom-color:rgba(0,0,0,.06);
+  }
+  .bar {
+    display:flex; align-items:center; gap:18px;
+    height:54px; max-width:1240px; margin:0 auto; padding:0 24px;
+  }
+  .brand { display:flex; align-items:center; gap:10px; font-size:14px; font-weight:600; }
+  .brand-mark {
+    width:18px; height:18px; border-radius:50%;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a'/></radialGradient><clipPath id='c'><circle cx='32' cy='32' r='28'/></clipPath></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/><g clip-path='url(%23c)' fill='none' stroke='%23ffffff' stroke-linecap='round'><ellipse cx='32' cy='32' rx='28' ry='8' stroke-opacity='0.7' stroke-width='2.8' transform='rotate(-22 32 32)'/><ellipse cx='32' cy='32' rx='28' ry='4' stroke-opacity='0.45' stroke-width='1.8' transform='rotate(38 32 32)'/></g></svg>");
+    background-size:cover;
+  }
+  .crumb { color:#9a9aa5; font-family:"SF Mono",ui-monospace,monospace; font-size:12px; letter-spacing:.04em; }
+  body.light .crumb { color:#71717a; }
+  .spacer { flex:1; }
+
+  main {
+    max-width:1240px; margin:0 auto; padding:32px 24px 64px;
+  }
+  h1 {
+    font-family:'Instrument Serif', Georgia, serif;
+    font-size:48px; font-weight:400; letter-spacing:-0.025em;
+    line-height:1.05; margin-bottom:14px;
+  }
+  .lead {
+    font-size:14px; line-height:1.6; color:#9a9aa5; max-width:62ch;
+    margin-bottom:28px;
+  }
+  body.light .lead { color:#52525b; }
+
+  .controls {
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+    margin-bottom:14px;
+    padding:14px 16px; border-radius:10px;
+    background:rgba(255,255,255,.03);
+    border:1px solid rgba(255,255,255,.06);
+  }
+  body.light .controls { background:rgba(0,0,0,.02); border-color:rgba(0,0,0,.06); }
+
+  .controls-label {
+    font-family:"SF Mono",ui-monospace,monospace;
+    font-size:11px; letter-spacing:.04em; color:#7a7a85; margin-right:6px;
+  }
+  body.light .controls-label { color:#52525b; }
+
+  .grid-pick {
+    display:flex; gap:4px;
+    padding:3px; border-radius:8px;
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.08);
+  }
+  body.light .grid-pick {
+    background:#fff;
+    border-color:rgba(0,0,0,.08);
+  }
+  .grid-pick button {
+    padding:6px 12px; border-radius:6px;
+    background:transparent; border:0;
+    color:#9a9aa5; cursor:pointer;
+    font:inherit; font-size:12px; font-weight:500;
+    font-family:"SF Mono",ui-monospace,monospace;
+  }
+  .grid-pick button.active {
+    background:#e7e7ea; color:#101217;
+  }
+  body.light .grid-pick button { color:#52525b; }
+  body.light .grid-pick button.active { background:#18181b; color:#fafafa; }
+
+  .addr-input {
+    flex:1; min-width:220px;
+    padding:7px 12px; border-radius:6px;
+    background:transparent;
+    border:1px solid rgba(255,255,255,.12);
+    color:inherit;
+    font:inherit; font-size:12px;
+    font-family:"SF Mono",ui-monospace,monospace;
+  }
+  .addr-input:focus { outline:none; border-color:#e7e7ea; }
+  body.light .addr-input { border-color:rgba(0,0,0,.12); }
+  body.light .addr-input:focus { border-color:#18181b; }
+
+  .reload-btn {
+    padding:7px 14px; border-radius:6px;
+    background:#e7e7ea; color:#101217;
+    border:0; cursor:pointer; font:inherit; font-size:12px; font-weight:600;
+  }
+  body.light .reload-btn { background:#18181b; color:#fafafa; }
+
+  .stats {
+    margin-bottom:14px;
+    font-family:"SF Mono",ui-monospace,monospace;
+    font-size:11px; color:#9a9aa5;
+    display:flex; gap:18px; flex-wrap:wrap;
+  }
+  body.light .stats { color:#52525b; }
+  .stats b { color:#e7e7ea; }
+  body.light .stats b { color:#18181b; }
+
+  .frame {
+    aspect-ratio:1 / 1;
+    border-radius:14px;
+    background:#14141a;
+    border:1px solid rgba(255,255,255,.06);
+    overflow:hidden;
+    max-height:calc(100vh - 240px);
+  }
+  body.light .frame { background:#e9e9ec; border-color:rgba(0,0,0,.06); }
+  .frame iframe { width:100%; height:100%; border:0; display:block; }
+
+  .hint {
+    margin-top:14px;
+    font-size:12px; color:#7a7a85; line-height:1.6;
+  }
+  body.light .hint { color:#52525b; }
+  .hint code {
+    font-family:"SF Mono",ui-monospace,monospace;
+    font-size:11px; padding:1px 5px; border-radius:3px;
+    background:rgba(255,255,255,.06); color:#e7e7ea;
+  }
+  body.light .hint code { background:rgba(0,0,0,.05); color:#18181b; }
+</style>
+</head>
+<body class="light">
+
+<header>
+  <div class="bar">
+    <a href="/" class="brand">
+      <span class="brand-mark"></span>
+      <span>dustopia</span>
+    </a>
+    <span class="crumb">/ test</span>
+    <span class="spacer"></span>
+  </div>
+</header>
+
+<main>
+  <h1>Particle density test bench.</h1>
+  <p class="lead">
+    Dial the per-token particle grid up or down without touching production.
+    Same wallet renders at every density so you can A/B perceived quality
+    against frame-rate. Add <code style="font-family:'SF Mono',ui-monospace,monospace;font-size:11px;padding:1px 5px;border-radius:3px;background:rgba(0,0,0,.05);">?grid=N</code>
+    to any <code style="font-family:'SF Mono',ui-monospace,monospace;font-size:11px;padding:1px 5px;border-radius:3px;background:rgba(0,0,0,.05);">/embed</code>
+    URL to use the override directly.
+  </p>
+
+  <div class="controls">
+    <span class="controls-label">grid</span>
+    <div class="grid-pick" id="gridPick">
+      <button data-grid="64">64²</button>
+      <button data-grid="96">96²</button>
+      <button data-grid="128" class="active">128²</button>
+      <button data-grid="144">144²</button>
+      <button data-grid="160">160²</button>
+      <button data-grid="192">192²</button>
+    </div>
+
+    <input id="addrInput" class="addr-input" type="text"
+      value="0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf"
+      placeholder="0x… or vitalik.eth" autocomplete="off" spellcheck="false">
+
+    <button id="reloadBtn" class="reload-btn">Reload</button>
+  </div>
+
+  <div class="stats" id="stats">
+    <span><b id="statGrid">128</b><sup>2</sup> particles per token</span>
+    <span><b id="statTotal">8 388 608</b> particles total at MAX_TOKENS=512</span>
+  </div>
+
+  <div class="frame">
+    <iframe id="testFrame" title="test sphere"></iframe>
+  </div>
+
+  <p class="hint">
+    Lower <code>grid</code> → fewer particles → higher FPS, but visible "dust"
+    grain at small token counts. Renderer caps at <code>MAX_TOKENS=512</code>
+    so the worst-case load is <code>grid² × 512</code>: 128² × 512 = 8.4 M
+    particles, 192² × 512 = 18.9 M. The current production default is
+    192² (desktop) / 128² (mobile + landing).
+  </p>
+</main>
+
+<script>
+  // safeStorage shim
+  window.safeStorage = (function() {
+    let mem = {};
+    try {
+      const k = '__t';
+      localStorage.setItem(k, k); localStorage.removeItem(k);
+      return {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+      };
+    } catch {
+      return { get: (k) => mem[k] ?? null, set: (k, v) => { mem[k] = v; } };
+    }
+  })();
+  (function() {
+    const saved = safeStorage.get('franken-theme');
+    if (saved === 'dark') document.body.classList.remove('light');
+    else                  document.body.classList.add('light');
+  })();
+
+  const fr        = document.getElementById('testFrame');
+  const addrInput = document.getElementById('addrInput');
+  const reloadBtn = document.getElementById('reloadBtn');
+  const pick      = document.getElementById('gridPick');
+  const statGrid  = document.getElementById('statGrid');
+  const statTotal = document.getElementById('statTotal');
+
+  let currentGrid = 128;
+
+  function fmt(n) {
+    return n.toLocaleString('en-US').replace(/,/g, ' ');
+  }
+
+  function applyStats(g) {
+    statGrid.textContent = g;
+    statTotal.textContent = fmt(g * g * 512);
+  }
+
+  // nocache=1 keeps test renders out of the R2 atlas / preview-cap cache.
+  // The whole point of this page is to throw arbitrary settings at the
+  // renderer; we don't want each variant to overwrite the canonical
+  // captured preview.
+  function buildSrc() {
+    const addr = (addrInput.value || '').trim();
+    if (!addr) return '';
+    const u = new URL(`/embed/${encodeURIComponent(addr)}`, location.href);
+    u.searchParams.set('grid', String(currentGrid));
+    u.searchParams.set('nocache', '1');
+    u.searchParams.set('t', String(Date.now()));
+    return u.toString();
+  }
+
+  function reload() {
+    const src = buildSrc();
+    if (!src) return;
+    fr.src = src;
+  }
+
+  pick.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-grid]');
+    if (!btn) return;
+    const g = parseInt(btn.dataset.grid, 10);
+    if (!Number.isFinite(g)) return;
+    currentGrid = g;
+    for (const b of pick.querySelectorAll('button')) {
+      b.classList.toggle('active', b.dataset.grid === btn.dataset.grid);
+    }
+    applyStats(g);
+    reload();
+  });
+
+  reloadBtn.addEventListener('click', reload);
+  addrInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') reload(); });
+
+  applyStats(currentGrid);
+  reload();
+</script>
+
+</body>
+</html>

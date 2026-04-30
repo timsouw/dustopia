@@ -13,4 +13,6 @@
 /play/*        /pfp/          301
 /pfp/*         /pfp/          200
 /pfp           /pfp/          200
+/test          /test/         200
+/test/*        /test/         200
 /*             /index.html    200
