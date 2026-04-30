@@ -294,7 +294,19 @@ const IS_MOBILE = (typeof matchMedia !== 'undefined' && matchMedia('(pointer: co
 // ~32× in memory at the values below — measured ~600 MB → tens of MB.
 const LANDING_MODE = (typeof window !== 'undefined') && window.__dustopiaLanding === true;
 
-const GRID             = LANDING_MODE ? 128 : (IS_MOBILE ? 128 : 192);  // 192² = 36864 particles per image; mobile 128² = 16384; landing 128² (was 96²) for crisper hero
+// Test override — `?grid=N` lets the dust-test page A/B different
+// particle densities without redeploying the embed. Capped to a safe
+// allowlist so a malicious caller can't allocate gigabytes of GPU
+// memory (192 × 192 = 37k particles per token; below 64 is invisible
+// motion blur).
+const _GRID_OVERRIDE = (typeof window !== 'undefined' && (() => {
+  try {
+    const v = parseInt(new URLSearchParams(location.search).get('grid'), 10);
+    return [64, 96, 128, 144, 160, 192].includes(v) ? v : null;
+  } catch { return null; }
+})()) || null;
+
+const GRID             = _GRID_OVERRIDE || (LANDING_MODE ? 128 : (IS_MOBILE ? 128 : 192));  // 192² = 36864 particles per image; mobile 128² = 16384; landing 128² (was 96²) for crisper hero
 // HISTORY_LEN was sized for SHEAR_FACTOR=0.55 (needed GRID + GRID·0.55
 // rows). Since SHEAR is now 0, we only need GRID rows + small slack
 // for camera reveals. Halving this halves the GPU memory of the two
