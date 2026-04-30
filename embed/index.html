@@ -210,6 +210,12 @@
     // wallets people paste in don't pollute the R2 atlas / preview-cap
     // caches. Atlas upload + preview capture both gated on this below.
     if (params.get('nocache') === '1') window.__dustopiaNocache = true;
+    // Explicit "refresh sphere" flow from /configure. Bypasses every
+    // read-side cache (R2 atlas, KV wallet pages) so the rebuild reflects
+    // the current state of the holder's wallet, then force-uploads atlas
+    // + preview-cap to overwrite the old R2 entries. The opposite of
+    // nocache: we WANT to write, we just don't want to read stale.
+    if (params.get('fresh') === '1') window.__dustopiaFresh = true;
     // Landing-hero mode: dustopia.xyz frames the deploy wallet's sphere as
     // the live hero. We disable preview-cap upload (the landing
     // shouldn't keep re-capturing what a real /embed visit will), but
@@ -496,6 +502,11 @@ async function fetchAllNFTsLive(owner, onProgress) {
       u = new URL(`${API_URL}/api/wallet/${owner}`);
       u.searchParams.set('spam', 'include');
       if (pageKey) u.searchParams.set('pageKey', pageKey);
+      // bust=1 tells the Worker to bypass the wallet KV cache on both
+      // read and write — used by /configure's "Refresh sphere" so a
+      // newly-bought NFT shows up immediately instead of waiting
+      // WALLET_TTL.
+      if (window.__dustopiaFresh) u.searchParams.set('bust', '1');
     } else {
       // Fallback: direct Alchemy call (local dev only — exposes API key).
       u = new URL('https://eth-mainnet.g.alchemy.com/nft/v3/YOUR_KEY/getNFTsForOwner');
@@ -899,7 +910,16 @@ async function hasCachedPreview(addr) {
     // Only treat WebP as "cached" — anything else (PNG, GIF) is from an
     // older capture path and should be re-shot in the new animated format.
     const ct = (r.headers.get('Content-Type') || '').toLowerCase();
-    return ct.startsWith('image/webp');
+    if (!ct.startsWith('image/webp')) return false;
+    // Reject zero / near-zero objects — past upload paths could leave a
+    // 0-byte WebP behind (capture-before-paint, blob.toBlob returning a
+    // header-only frame). Without this guard the next visitor sees the
+    // HEAD return 200 + image/webp and skips re-uploading, leaving the
+    // gallery rendering an "image" that paints as blank. 5 KB is well
+    // below any real animated WebP from this codebase (~150-300 KB).
+    const len = parseInt(r.headers.get('Content-Length') || '0', 10);
+    if (!Number.isFinite(len) || len < 5_000) return false;
+    return true;
   } catch { return false; }
 }
 
@@ -1259,9 +1279,10 @@ async function buildLiveData(input) {
   // Skip the image-fetch + canvas-build steps entirely if we have a
   // pre-built atlas in R2 for this (addr, GRID, selection). Repeat
   // visits to the same configured token (incl. every OpenSea iframe
-  // load) become a single binary download.
-  setStatus(`<span>checking cache for ${short}…</span>`);
-  const cached = await tryFetchCachedAtlas(addr, fp);
+  // load) become a single binary download. Skipped in fresh mode —
+  // the holder explicitly asked to rebuild from the current wallet.
+  setStatus(`<span>${window.__dustopiaFresh ? 'rebuilding' : 'checking cache'} for ${short}…</span>`);
+  const cached = window.__dustopiaFresh ? null : await tryFetchCachedAtlas(addr, fp);
   if (cached) {
     setStatus(`<span class="ok">✓ cached atlas (${cached.meta.count} tokens)</span>`);
     return {
@@ -1435,7 +1456,11 @@ async function main() {
   // skipped entirely in editor preview mode so drafts don't overwrite
   // the canonical OpenSea grid image.
   if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaLanding && !window.__dustopiaPfp) {
-    setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr).catch(() => {}); }, PREVIEW_DELAY_MS);
+    // In fresh mode the holder explicitly asked to overwrite — skip the
+    // hasCachedPreview short-circuit so the new capture lands on top of
+    // whatever's currently in R2.
+    const force = !!window.__dustopiaFresh;
+    setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr, { force }).catch(() => {}); }, PREVIEW_DELAY_MS);
   }
 
   // Collapse the load panel into a small pill that stays clickable.

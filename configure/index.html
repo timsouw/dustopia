@@ -994,6 +994,7 @@ function renderSidebar() {
     <div class="tree ${subsetActive ? '' : 'disabled'}" id="tree">${renderTree()}</div>
     <div class="save-bar">
       <span class="summary" id="saveSummary">${saveSummaryText()}</span>
+      <button class="btn" id="refreshBtn" title="Re-fetch the wallet and overwrite the saved sphere. Useful after buying / removing NFTs without changing the selection.">Refresh sphere</button>
       <button class="btn btn-primary" id="saveBtn" ${editor.saving ? 'disabled' : ''}>${editor.saving ? 'Signing…' : 'Save'}</button>
     </div>`;
 }
@@ -1086,6 +1087,24 @@ function wireSidebar() {
   });
   $('#tree')?.addEventListener('click', onTreeClick);
   $('#saveBtn')?.addEventListener('click', onSaveClick);
+  $('#refreshBtn')?.addEventListener('click', onRefreshClick);
+}
+
+// "Refresh sphere" — reload the preview iframe with ?fresh=1 so the
+// embed bypasses every read-side cache (R2 atlas, KV wallet pages),
+// rebuilds the atlas from the current wallet state, and force-uploads
+// the new preview-cap on top of the existing R2 entry. No signature
+// required: a holder paying for new render of their own already-saved
+// selection isn't a security boundary.
+function onRefreshClick() {
+  const fr = $('#previewFrame');
+  if (!fr) return;
+  const u = new URL(fr.src, location.href);
+  u.searchParams.set('fresh', '1');
+  u.searchParams.set('t', String(Date.now()));
+  editor.iframeStale = true;
+  $('#previewStale')?.classList.add('show');
+  fr.src = u.toString();
 }
 
 function refreshTreeOnly() {
