@@ -1257,9 +1257,12 @@ async function handleConfig(rawTokenId, request, env, ctx) {
 // "fresh" without an explicit purge job.
 // =====================================================================
 
-const FEED_KEY = 'pfp-feed:recent';
-const FEED_MAX = 50;
-const FEED_TTL = 60 * 60 * 24 * 30;  // 30 days
+const FEED_KEY       = 'pfp-feed:recent';
+const FEED_TOTAL_KEY = 'pfp-feed:total';
+const FEED_SEEN_PFX  = 'pfp-seen:';            // pfp-seen:<addr>
+const FEED_MAX       = 200;                   // visible cap on the recent list
+const FEED_TTL       = 60 * 60 * 24 * 30;     // 30 days for the recent blob
+const FEED_SEEN_TTL  = 60 * 60 * 24 * 365;    // 1 year for first-seen markers
 
 async function readFeed(env) {
   const raw = await env.WALLET_CACHE.get(FEED_KEY);
@@ -1268,9 +1271,15 @@ async function readFeed(env) {
   catch { return []; }
 }
 
+async function readFeedTotal(env) {
+  const raw = await env.WALLET_CACHE.get(FEED_TOTAL_KEY);
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 async function handleFeedGet(request, env) {
-  const list = await readFeed(env);
-  return jsonResponse({ entries: list }, request);
+  const [list, total] = await Promise.all([readFeed(env), readFeedTotal(env)]);
+  return jsonResponse({ entries: list, total }, request);
 }
 
 async function handleFeedAdd(rawAddr, request, env) {
@@ -1278,17 +1287,28 @@ async function handleFeedAdd(rawAddr, request, env) {
   if (!/^0x[0-9a-f]{40}$/.test(addr)) {
     return errorResponse(400, 'invalid address', request);
   }
+  // First-seen check: separate KV marker per address with a 1-year
+  // TTL. If no marker exists, this is a brand-new wallet — bump the
+  // total counter. The visible 200-cap list is for *recent activity*
+  // ("look how many people just rendered"); the total counter is the
+  // bragging-rights stat ("look how many people EVER rendered").
+  const seenKey = FEED_SEEN_PFX + addr;
+  const alreadySeen = await env.WALLET_CACHE.get(seenKey);
+  let total = await readFeedTotal(env);
+  if (!alreadySeen) {
+    total += 1;
+    await env.WALLET_CACHE.put(seenKey, '1', { expirationTtl: FEED_SEEN_TTL });
+    await env.WALLET_CACHE.put(FEED_TOTAL_KEY, String(total));
+  }
+  // Update visible-list (most-recent-wins dedup, capped at FEED_MAX).
   const list = await readFeed(env);
-  // Most-recent-wins dedup: drop any prior entry for this address,
-  // then prepend a fresh one. Cap at FEED_MAX so old activity falls
-  // off the bottom naturally.
   const filtered = list.filter(e => e && e.addr !== addr);
   filtered.unshift({ addr, ts: Date.now() });
   const trimmed = filtered.slice(0, FEED_MAX);
   await env.WALLET_CACHE.put(FEED_KEY, JSON.stringify(trimmed), {
     expirationTtl: FEED_TTL,
   });
-  return jsonResponse({ ok: true, count: trimmed.length }, request);
+  return jsonResponse({ ok: true, count: trimmed.length, total }, request);
 }
 
 // Bypass the OWNER_TTL KV cache so the verification step in PUT can't be

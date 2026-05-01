@@ -349,6 +349,31 @@
     max-width:50ch;
   }
   body.light .feed-sub { color:#52525b; }
+  /* Total-rendered counter — bragging stat above the recent list.
+     Big serif number + small all-caps label, social-proof style. */
+  .feed-total {
+    display:flex; align-items:baseline; gap:14px;
+    margin-bottom:18px;
+    padding-bottom:18px;
+    border-bottom:1px solid rgba(255,255,255,.05);
+  }
+  body.light .feed-total { border-bottom-color:rgba(0,0,0,.06); }
+  .feed-total-n {
+    font-family:'Instrument Serif', Georgia, serif;
+    font-size:64px; font-weight:400; letter-spacing:-0.03em;
+    line-height:1;
+    color:#fafafa;
+  }
+  body.light .feed-total-n { color:#18181b; }
+  .feed-total-label {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:11px; letter-spacing:0.18em; text-transform:uppercase;
+    color:#7a7a85;
+  }
+  body.light .feed-total-label { color:#71717a; }
+  @media (max-width:600px) {
+    .feed-total-n { font-size:48px; }
+  }
   .feed-list {
     list-style:none; margin:0; padding:0;
     display:grid;
@@ -467,6 +492,10 @@
   </p>
 
   <section class="feed" id="feedSection" hidden>
+    <div class="feed-total" id="feedTotal" hidden>
+      <span class="feed-total-n" id="feedTotalN">0</span>
+      <span class="feed-total-label">wallets rendered</span>
+    </div>
     <h2 class="feed-h">Recently rendered</h2>
     <p class="feed-sub">Wallets people have spun up here. Click any to load it.</p>
     <ul class="feed-list" id="feedList"></ul>
@@ -759,10 +788,17 @@
       if (!r.ok) return;
       const j = await r.json();
       const list = Array.isArray(j.entries) ? j.entries : [];
+      const total = (typeof j.total === 'number' && j.total >= 0) ? j.total : 0;
       const section = document.getElementById('feedSection');
       const ul = document.getElementById('feedList');
       if (!list.length) { section.hidden = true; return; }
       section.hidden = false;
+      const totalEl = document.getElementById('feedTotal');
+      const totalN  = document.getElementById('feedTotalN');
+      if (total > 0 && totalEl && totalN) {
+        totalN.textContent = total.toLocaleString('en-US').replace(/,/g, ' ');
+        totalEl.hidden = false;
+      }
       ul.innerHTML = list.map(e => `
         <li>
           <a class="feed-link" href="#${e.addr}" data-addr="${e.addr}">
