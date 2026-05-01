@@ -329,6 +329,68 @@
     max-width:54ch;
   }
   body.light .footnote { color:#71717a; }
+
+  /* Recently-rendered feed — appears below the main pfp-stage once
+     the public list has at least one entry. The same wallet can only
+     appear once (most-recent-wins on the worker side). */
+  .feed {
+    margin-top:64px;
+    padding-top:32px;
+    border-top:1px solid rgba(255,255,255,.06);
+  }
+  body.light .feed { border-top-color:rgba(0,0,0,.08); }
+  .feed-h {
+    font-family:'Instrument Serif', Georgia, serif;
+    font-size:32px; font-weight:400; letter-spacing:-0.02em;
+    margin-bottom:8px;
+  }
+  .feed-sub {
+    font-size:13px; line-height:1.55; color:#9a9aa5; margin-bottom:24px;
+    max-width:50ch;
+  }
+  body.light .feed-sub { color:#52525b; }
+  .feed-list {
+    list-style:none; margin:0; padding:0;
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
+    gap:8px;
+  }
+  .feed-list li { margin:0; padding:0; }
+  .feed-link {
+    display:flex; align-items:center; justify-content:space-between;
+    gap:10px;
+    padding:10px 14px;
+    border-radius:8px;
+    background:rgba(255,255,255,.03);
+    border:1px solid rgba(255,255,255,.05);
+    color:inherit;
+    cursor:pointer;
+    transition:border-color 140ms, background 140ms;
+  }
+  body.light .feed-link {
+    background:rgba(0,0,0,.025);
+    border-color:rgba(0,0,0,.05);
+  }
+  .feed-link:hover {
+    border-color:rgba(255,255,255,.18);
+    background:rgba(255,255,255,.05);
+  }
+  body.light .feed-link:hover {
+    border-color:rgba(0,0,0,.18);
+    background:rgba(0,0,0,.04);
+  }
+  .feed-addr {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:12px; letter-spacing:.02em;
+    color:#e7e7ea;
+  }
+  body.light .feed-addr { color:#18181b; }
+  .feed-time {
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    font-size:10.5px; color:#7a7a85;
+    flex-shrink:0;
+  }
+  body.light .feed-time { color:#71717a; }
 </style>
 </head>
 <body class="light">
@@ -403,6 +465,12 @@
   <p class="footnote">
     The PFP is rendered locally in your browser from on-chain wallet data. Nothing is uploaded — when you press Download, the file is generated and saved straight to your machine.
   </p>
+
+  <section class="feed" id="feedSection" hidden>
+    <h2 class="feed-h">Recently rendered</h2>
+    <p class="feed-sub">Wallets people have spun up here. Click any to load it.</p>
+    <ul class="feed-list" id="feedList"></ul>
+  </section>
 </main>
 
 <script>
@@ -456,6 +524,7 @@
     return false;
   }
 
+  const API_URL  = 'https://api.dustopia.xyz';
   const PFP_SIZE = 4096;     // final PNG dimensions (also forwarded to iframe via postMessage)
   let currentAddr = null;
   let frameReady  = false;
@@ -562,6 +631,17 @@
     document.getElementById('dlBtn').disabled = false;
     document.getElementById('dlMp4Btn').disabled = false;
     setStatus('Ready.', 'ready');
+    // Append to the public "recently rendered" feed so others see this
+    // address showed up. Fire-and-forget — feed is non-critical, a
+    // failure here shouldn't surface to the user. We intentionally
+    // ignore preview/landing iframes (they pass __dustopiaPreview /
+    // __dustopiaLanding in the embed URL but we just gate on the
+    // currentAddr coming from the form input).
+    if (currentAddr) {
+      fetch(`${API_URL}/api/pfp-feed/${encodeURIComponent(currentAddr)}`, { method: 'POST' })
+        .then(() => loadFeed())
+        .catch(() => {});
+    }
   });
 
   // Form submit
@@ -660,6 +740,50 @@
       loadAddr(v);
     }
   })();
+
+  // Recently-rendered feed. Fetched once on page load + after every
+  // successful render so the visitor sees the list grow with their
+  // own contribution. Click on an entry → loads that wallet into the
+  // input and triggers loadAddr(), same path as a manual submit.
+  function shortAddr(a) { return `${a.slice(0, 6)}…${a.slice(-4)}`; }
+  function relTime(ts) {
+    const d = Math.max(0, Date.now() - ts) / 1000;
+    if (d < 60)        return `${Math.floor(d)}s ago`;
+    if (d < 3600)      return `${Math.floor(d / 60)}m ago`;
+    if (d < 86_400)    return `${Math.floor(d / 3600)}h ago`;
+    return `${Math.floor(d / 86_400)}d ago`;
+  }
+  async function loadFeed() {
+    try {
+      const r = await fetch(`${API_URL}/api/pfp-feed`);
+      if (!r.ok) return;
+      const j = await r.json();
+      const list = Array.isArray(j.entries) ? j.entries : [];
+      const section = document.getElementById('feedSection');
+      const ul = document.getElementById('feedList');
+      if (!list.length) { section.hidden = true; return; }
+      section.hidden = false;
+      ul.innerHTML = list.map(e => `
+        <li>
+          <a class="feed-link" href="#${e.addr}" data-addr="${e.addr}">
+            <span class="feed-addr">${shortAddr(e.addr)}</span>
+            <span class="feed-time">${relTime(e.ts)}</span>
+          </a>
+        </li>`).join('');
+    } catch { /* feed is non-critical */ }
+  }
+  document.getElementById('feedList').addEventListener('click', (ev) => {
+    const link = ev.target.closest('a.feed-link');
+    if (!link) return;
+    ev.preventDefault();
+    const addr = link.dataset.addr;
+    if (!addr) return;
+    document.getElementById('addrInput').value = addr;
+    location.hash = addr;
+    loadAddr(addr);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  loadFeed();
 </script>
 
 </body>
