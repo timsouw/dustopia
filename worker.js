@@ -1243,6 +1243,54 @@ async function handleConfig(rawTokenId, request, env, ctx) {
   return errorResponse(405, 'method not allowed', request);
 }
 
+// =====================================================================
+// PFP FEED — the /pfp page logs every successfully-rendered address
+// into a public, append-only feed so newcomers see "real people are
+// using this". Pre-mint, this is also the cheapest demand-signal we
+// have: a long feed = visible interest, even before any token exists
+// on chain.
+//
+// Single KV blob (`pfp-feed:recent`), JSON array, capped at 50, dedup
+// by address (most-recent-wins). Read-modify-write: occasional lost
+// writes under heavy concurrency are acceptable — losing one entry
+// out of fifty is invisible to the user. 30-day TTL keeps the feed
+// "fresh" without an explicit purge job.
+// =====================================================================
+
+const FEED_KEY = 'pfp-feed:recent';
+const FEED_MAX = 50;
+const FEED_TTL = 60 * 60 * 24 * 30;  // 30 days
+
+async function readFeed(env) {
+  const raw = await env.WALLET_CACHE.get(FEED_KEY);
+  if (!raw) return [];
+  try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; }
+  catch { return []; }
+}
+
+async function handleFeedGet(request, env) {
+  const list = await readFeed(env);
+  return jsonResponse({ entries: list }, request);
+}
+
+async function handleFeedAdd(rawAddr, request, env) {
+  const addr = String(rawAddr || '').toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(addr)) {
+    return errorResponse(400, 'invalid address', request);
+  }
+  const list = await readFeed(env);
+  // Most-recent-wins dedup: drop any prior entry for this address,
+  // then prepend a fresh one. Cap at FEED_MAX so old activity falls
+  // off the bottom naturally.
+  const filtered = list.filter(e => e && e.addr !== addr);
+  filtered.unshift({ addr, ts: Date.now() });
+  const trimmed = filtered.slice(0, FEED_MAX);
+  await env.WALLET_CACHE.put(FEED_KEY, JSON.stringify(trimmed), {
+    expirationTtl: FEED_TTL,
+  });
+  return jsonResponse({ ok: true, count: trimmed.length }, request);
+}
+
 // Bypass the OWNER_TTL KV cache so the verification step in PUT can't be
 // fooled by stale ownership. Same encoding as lookupOwner but no cache R/W.
 async function fetchOwnerFresh(tokenId, env) {
@@ -1316,6 +1364,25 @@ export default {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handleConfig(configMatch[1], request, env, ctx);
+    }
+
+    // PFP feed: GET (public list) or POST /api/pfp-feed/<addr> (append).
+    // Routed before the GET-only gate because POST is allowed.
+    if (path === '/api/pfp-feed' || path === '/api/pfp-feed/') {
+      if (!(await rateLimitOk(request, env))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      if (request.method !== 'GET') return errorResponse(405, 'method not allowed', request);
+      return handleFeedGet(request, env);
+    }
+    const feedAddMatch = path.match(/^\/api\/pfp-feed\/([^/]+)\/?$/);
+    if (feedAddMatch) {
+      const bucket = request.method === 'POST' ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      if (request.method !== 'POST') return errorResponse(405, 'method not allowed', request);
+      return handleFeedAdd(feedAddMatch[1], request, env);
     }
 
 
