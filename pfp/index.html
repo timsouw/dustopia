@@ -377,32 +377,52 @@
   .feed-list {
     list-style:none; margin:0; padding:0;
     display:grid;
-    grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
-    gap:8px;
+    grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));
+    gap:18px;
   }
   .feed-list li { margin:0; padding:0; }
   .feed-link {
-    display:flex; align-items:center; justify-content:space-between;
+    display:flex; flex-direction:column; align-items:center;
     gap:10px;
-    padding:10px 14px;
-    border-radius:8px;
-    background:rgba(255,255,255,.03);
+    padding:14px;
+    border-radius:14px;
+    background:rgba(255,255,255,.025);
     border:1px solid rgba(255,255,255,.05);
     color:inherit;
     cursor:pointer;
-    transition:border-color 140ms, background 140ms;
+    transition:border-color 140ms, background 140ms, transform 200ms cubic-bezier(.2,.7,.2,1);
   }
   body.light .feed-link {
-    background:rgba(0,0,0,.025);
+    background:rgba(0,0,0,.02);
     border-color:rgba(0,0,0,.05);
   }
   .feed-link:hover {
     border-color:rgba(255,255,255,.18);
-    background:rgba(255,255,255,.05);
+    background:rgba(255,255,255,.04);
+    transform:translateY(-1px);
   }
   body.light .feed-link:hover {
     border-color:rgba(0,0,0,.18);
-    background:rgba(0,0,0,.04);
+    background:rgba(0,0,0,.03);
+  }
+  .feed-thumb {
+    width:100%;
+    aspect-ratio:1 / 1;
+    border-radius:50%;
+    overflow:hidden;
+    background:linear-gradient(135deg, #1a1a22 0%, #0e0e14 100%);
+    border:1px solid rgba(255,255,255,.04);
+  }
+  body.light .feed-thumb {
+    background:linear-gradient(135deg, #f0f0f3 0%, #e2e2e6 100%);
+    border-color:rgba(0,0,0,.04);
+  }
+  .feed-thumb img {
+    width:100%; height:100%; object-fit:cover; display:block;
+  }
+  .feed-meta {
+    display:flex; flex-direction:column; align-items:center; gap:2px;
+    width:100%;
   }
   .feed-addr {
     font-family:"SF Mono","Menlo",ui-monospace,monospace;
@@ -413,7 +433,6 @@
   .feed-time {
     font-family:"SF Mono","Menlo",ui-monospace,monospace;
     font-size:10.5px; color:#7a7a85;
-    flex-shrink:0;
   }
   body.light .feed-time { color:#71717a; }
 </style>
@@ -554,6 +573,10 @@
   }
 
   const API_URL  = 'https://api.dustopia.xyz';
+  // Inline brand-mark SVG used as the feed thumbnail fallback when
+  // /api/preview-cap/<addr> 404s (no captured WebP for that wallet
+  // yet). Same streaked-sphere as the favicon / logo.
+  const BRAND_MARK_SVG = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><radialGradient id='g' cx='38%25' cy='32%25' r='65%25'><stop offset='0%25' stop-color='%23ffffff'/><stop offset='30%25' stop-color='%23d8d2ff' stop-opacity='0.95'/><stop offset='60%25' stop-color='%237262d4' stop-opacity='0.85'/><stop offset='100%25' stop-color='%23120a2a'/></radialGradient><clipPath id='c'><circle cx='32' cy='32' r='28'/></clipPath></defs><circle cx='32' cy='32' r='28' fill='url(%23g)'/><g clip-path='url(%23c)' fill='none' stroke='%23ffffff' stroke-linecap='round'><ellipse cx='32' cy='32' rx='28' ry='8' stroke-opacity='0.7' stroke-width='2.8' transform='rotate(-22 32 32)'/><ellipse cx='32' cy='32' rx='28' ry='4' stroke-opacity='0.45' stroke-width='1.8' transform='rotate(38 32 32)'/></g></svg>";
   const PFP_SIZE = 4096;     // final PNG dimensions (also forwarded to iframe via postMessage)
   let currentAddr = null;
   let frameReady  = false;
@@ -803,11 +826,24 @@
         totalN.textContent = total.toLocaleString('en-US').replace(/,/g, ' ');
         totalEl.hidden = false;
       }
+      // Per-tile preview-cap thumbnail. /api/preview-cap/<addr> returns
+      // the captured WebP if R2 has it; if not it 404's and onerror swaps
+      // to the brand-mark SVG so the tile never shows a broken-image
+      // icon. The preview-cap is populated by every /pfp render now
+      // (see embed: __dustopiaPfp no longer in the upload-skip list).
       ul.innerHTML = list.map(e => `
         <li>
           <a class="feed-link" href="#${e.addr}" data-addr="${e.addr}">
-            <span class="feed-addr">${shortAddr(e.addr)}</span>
-            <span class="feed-time">${relTime(e.ts)}</span>
+            <div class="feed-thumb">
+              <img src="${API_URL}/api/preview-cap/${e.addr}"
+                   alt="sphere of ${shortAddr(e.addr)}"
+                   loading="lazy" decoding="async"
+                   onerror="this.onerror=null;this.src='${BRAND_MARK_SVG}';">
+            </div>
+            <div class="feed-meta">
+              <span class="feed-addr">${shortAddr(e.addr)}</span>
+              <span class="feed-time">${relTime(e.ts)}</span>
+            </div>
           </a>
         </li>`).join('');
     } catch { /* feed is non-critical */ }
