@@ -205,7 +205,7 @@ async function handleEns(rawName, request, env) {
 // after wallet connect. One Alchemy call, short KV cache. Public — token
 // ownership is on-chain anyway, no privacy concern in exposing the read.
 // =====================================================================
-const OWNED_TTL = 6 * 60 * 60;    // 6h — ownership changes are caught by the transfer webhook (which wipes from + to addresses); polling alone can't bust the cache
+const OWNED_TTL = 6 * 60 * 60;    // 6h — bounds the staleness window for ownership changes. /configure's "Refresh sphere" sends ?bust=1 for the impatient case.
 
 async function handleOwned(addr, request, env) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
@@ -389,7 +389,7 @@ const NFT_CONTRACT   = '0xFc2c97FFE6a6B85e3a0eaf15Aa395d1A6DcC1DFb';
 // Resilience anchor: the deploy wallet. Used when Alchemy can't tell us who
 // currently owns a token (network blip, key rotation race, etc.).
 const OWNER_FALLBACK = '0x014c2b84bce4f4ec280c8d91d9f6a9eb46063daf';
-const OWNER_TTL      = 24 * 60 * 60;  // 24h KV TTL — relies on the transfer webhook + handleConfigPut to invalidate on real changes; OpenSea / marketplace polling no longer eats KV writes
+const OWNER_TTL      = 24 * 60 * 60;  // 24h KV TTL — handleConfigPut invalidates the entry when the owner saves a new selection; otherwise we re-resolve once a day. OpenSea / marketplace polling no longer eats KV writes.
 const METADATA_TTL   = 60;      // Cache-Control: max-age on the JSON response
 
 function metadataResponse(body, request, init = {}) {
@@ -691,11 +691,6 @@ async function handlePreviewCap(addr, request, env, ctx) {
     return jsonResponse({ ok: true, bytes: buf.byteLength, type: detected }, request);
   }
 
-  if (request.method === 'DELETE') {
-    await env.ATLAS.delete(key).catch(() => {});
-    return jsonResponse({ ok: true }, request);
-  }
-
   return errorResponse(405, 'method not allowed', request);
 }
 
@@ -780,9 +775,10 @@ async function handleMetadata(rawTokenId, request, env) {
 // result is deterministic for that (wallet, GRID) pair until the holdings
 // change. We cache it forever and serve it from R2 on every subsequent visit.
 //
-// Invalidation is manual today: DELETE /api/atlas/<addr> blows away both grids
-// and forces a rebuild on next load. A future Alchemy webhook on Transfer
-// events will call DELETE automatically when an NFT moves in/out of a wallet.
+// Invalidation: /configure's "Refresh sphere" reloads the embed iframe with
+// ?fresh=1, which sends ?bust=1 to the wallet endpoint. The atlas itself
+// is keyed by (addr, grid, selection-fingerprint), so a different selection
+// just writes a new R2 entry rather than overwriting the previous one.
 //
 // Keys:
 //   <addr_lower>/<grid>.bin   raw RGB8 (N · grid² · 3 bytes)
@@ -983,47 +979,9 @@ async function handleAtlasPut(addr, grid, wantMeta, fp, request, env) {
   return jsonResponse({ ok: true, bytes: buf.byteLength, encoded: isGzipped ? ce : null }, request);
 }
 
-async function handleAtlasDelete(addr, request, env, ctx) {
-  // Wipe every (grid, fingerprint) entry for this address. We list under
-  // the addr prefix instead of enumerating because the holder may have
-  // saved several distinct selections — each has its own fp-suffixed key.
-  // Idempotent — missing keys are no-ops.
-  const a = addr.toLowerCase();
-  let truncated = true;
-  let cursor = undefined;
-  const keys = [];
-  while (truncated && keys.length < 256) {  // hard ceiling = sanity
-    const list = await env.ATLAS.list({ prefix: `${a}/`, cursor }).catch(() => null);
-    if (!list) break;
-    for (const obj of list.objects) keys.push(obj.key);
-    truncated = list.truncated;
-    cursor = list.cursor;
-  }
-  await Promise.all(keys.map(k => env.ATLAS.delete(k).catch(() => {})));
-  // Edge cache purge — only clears this region's edge node. Other regions
-  // serve stale bytes until their Cache-Control TTL expires. Acceptable for
-  // a manual refresh button; if global propagation matters later we'll
-  // version the URL or use the Cache Purge API.
-  if (ctx) {
-    const origin = new URL(request.url).origin;
-    const cacheUrls = [];
-    for (const grid of ATLAS_GRIDS_OK) {
-      cacheUrls.push(`${origin}/api/atlas/${addr}?grid=${grid}`);
-      cacheUrls.push(`${origin}/api/atlas/${addr}?grid=${grid}&meta=1`);
-    }
-    ctx.waitUntil(Promise.all(cacheUrls.map(u =>
-      caches.default.delete(new Request(u, { method: 'GET' })).catch(() => {})
-    )));
-  }
-  return jsonResponse({ ok: true, deleted: keys.length }, request);
-}
-
 async function handleAtlas(addr, request, env, ctx) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
     return errorResponse(400, 'invalid address', request);
-  }
-  if (request.method === 'DELETE') {
-    return handleAtlasDelete(addr, request, env, ctx);
   }
   const url = new URL(request.url);
   const grid = parseInt(url.searchParams.get('grid') || '0', 10);
@@ -1039,6 +997,133 @@ async function handleAtlas(addr, request, env, ctx) {
   }
   if (request.method === 'GET') return handleAtlasGet(addr, grid, wantMeta, fpRaw, request, env, ctx);
   if (request.method === 'PUT') return handleAtlasPut(addr, grid, wantMeta, fpRaw, request, env);
+  return errorResponse(405, 'method not allowed', request);
+}
+
+// =====================================================================
+// LOOP CACHE — pre-recorded 30 s of flocking simulation, stored as a
+// quantized Int16 binary in R2. The frontend records the live physics
+// once, uploads, and from then on every visitor (and every iframe in the
+// gallery / pfp feed) downloads the same buffer and plays it back without
+// running any physics. Removes the per-visitor CPU cost that made the
+// live render unviable on weak devices.
+//
+// Key shape: loop/<addr_lower>/<fp>.bin
+//   fp is the same selection fingerprint used for the atlas key, so a
+//   different selection lives at a different key. Old loops for previous
+//   selections are orphaned but harmless — bounded by LOOP_PER_ADDR_CAP.
+//
+// Wire format (frame-major, little-endian):
+//   16-byte header:
+//     [0..3]   magic 'DSTL'
+//     [4]      version u8 = 1
+//     [5]      flags u8 (reserved)
+//     [6..7]   frames u16  (e.g. 900)
+//     [8..9]   tokens u16  (matches meta.count)
+//     [10..13] posScale f32 (dequant: pos = q / posScale)
+//     [14..15] fwdScale u16-as-bits — actually written as the next 6 bytes
+//   ...layout finalised by the frontend; worker treats payload as opaque.
+//   The worker just enforces size caps + Content-Type + optional gzip.
+//
+// Upload may be Content-Encoding: gzip; we forward as-is so the browser
+// decompresses transparently on GET (mirrors the atlas path).
+// =====================================================================
+const LOOP_BIN_MAX        = 8 * 1024 * 1024;   // 8 MiB ceiling — covers N=512 × 900 frames × 12 bytes (~5.5 MB) with headroom
+const LOOP_PER_ADDR_CAP   = 16;                // distinct selections per address before we 429 the PUT
+const LOOP_FP_RE          = /^[a-z0-9]{16}$/;
+const LOOP_CACHE_CONTROL  = 'public, max-age=31536000, immutable';
+
+function loopKey(addr, fp) {
+  const a = addr.toLowerCase();
+  return fp === 'all' ? `loop/${a}/all.bin` : `loop/${a}/${fp}.bin`;
+}
+
+async function handleLoopGet(addr, fp, request, env) {
+  const cache = caches.default;
+  const cacheKey = new Request(new URL(request.url).toString(), { method: 'GET' });
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const h = new Headers(hit.headers);
+    h.set('X-Edge-Cache', 'HIT');
+    return new Response(hit.body, { status: hit.status, headers: h });
+  }
+
+  const obj = await env.ATLAS.get(loopKey(addr, fp));
+  if (!obj) return errorResponse(404, 'loop not cached', request);
+
+  const headers = new Headers({
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control':               LOOP_CACHE_CONTROL,
+    'X-Edge-Cache':                'MISS',
+  });
+  obj.writeHttpMetadata(headers);
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream');
+  return new Response(obj.body, { headers });
+}
+
+async function handleLoopHead(addr, fp, request, env) {
+  const head = await env.ATLAS.head(loopKey(addr, fp));
+  if (!head) return errorResponse(404, 'loop not cached', request);
+  const ct = (head.httpMetadata && head.httpMetadata.contentType) || 'application/octet-stream';
+  return new Response(null, {
+    status: 200,
+    headers: {
+      ...corsHeaders(request),
+      'Content-Type':   ct,
+      'Content-Length': String(head.size),
+    },
+  });
+}
+
+async function handleLoopPut(addr, fp, request, env) {
+  const ct = (request.headers.get('Content-Type') || '').toLowerCase().split(';')[0].trim();
+  if (ct !== 'application/octet-stream') {
+    return errorResponse(415, 'expected application/octet-stream', request);
+  }
+  const lenHdr = request.headers.get('Content-Length');
+  if (!lenHdr) return errorResponse(411, 'Content-Length required', request);
+  const len = parseInt(lenHdr, 10);
+  if (!Number.isFinite(len) || len <= 0) return errorResponse(400, 'invalid Content-Length', request);
+  if (len > LOOP_BIN_MAX) return errorResponse(413, `body too large (${len} > ${LOOP_BIN_MAX})`, request);
+
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength !== len) return errorResponse(400, 'body length mismatch', request);
+
+  // Per-address cap so a malicious client can't fill R2 with thousands of
+  // bogus selections. Atlas has the same shape (ATLAS_PER_ADDR_CAP).
+  const list = await env.ATLAS.list({
+    prefix: `loop/${addr.toLowerCase()}/`,
+    limit:  LOOP_PER_ADDR_CAP + 1,
+  }).catch(() => null);
+  if (list && list.objects.length >= LOOP_PER_ADDR_CAP) {
+    const targetKey = loopKey(addr, fp);
+    const exists    = list.objects.some(o => o.key === targetKey);
+    if (!exists) return errorResponse(429, `loop cache cap reached (${LOOP_PER_ADDR_CAP} entries per address)`, request);
+  }
+
+  // Content-Encoding: gzip is fine — frontend may compress before PUT to
+  // save bandwidth. We persist the encoding metadata so GET returns the
+  // gzipped bytes and the browser auto-decompresses.
+  const ce = (request.headers.get('Content-Encoding') || '').toLowerCase().trim();
+  const httpMetadata = { contentType: 'application/octet-stream' };
+  if (ce === 'gzip') httpMetadata.contentEncoding = 'gzip';
+
+  await env.ATLAS.put(loopKey(addr, fp), buf, { httpMetadata });
+  return jsonResponse({ ok: true, bytes: buf.byteLength, encoded: ce === 'gzip' ? 'gzip' : null }, request);
+}
+
+async function handleLoop(addr, request, env, ctx) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    return errorResponse(400, 'invalid address', request);
+  }
+  const url = new URL(request.url);
+  const fp  = url.searchParams.get('fp') || 'all';
+  if (fp !== 'all' && !LOOP_FP_RE.test(fp)) {
+    return errorResponse(400, 'invalid fp', request);
+  }
+  if (request.method === 'GET')  return handleLoopGet(addr, fp, request, env);
+  if (request.method === 'HEAD') return handleLoopHead(addr, fp, request, env);
+  if (request.method === 'PUT')  return handleLoopPut(addr, fp, request, env);
   return errorResponse(405, 'method not allowed', request);
 }
 
@@ -1350,17 +1435,28 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // Atlas cache: GET (any browser), PUT (frontend after build), DELETE
-    // (refresh button / future Alchemy webhook). Routed before the global
-    // method check below because it accepts non-GET methods. PUTs use the
-    // tighter rate-limit bucket since each one writes R2.
+    // Atlas cache: GET (any browser) or PUT (frontend after build). Routed
+    // before the global method check below because it accepts non-GET.
+    // PUTs use the tighter rate-limit bucket since each one writes R2.
     const atlasMatch = path.match(/^\/api\/atlas\/([^/]+)\/?$/);
     if (atlasMatch) {
-      const bucket = (request.method === 'PUT' || request.method === 'DELETE') ? 'put' : 'general';
+      const bucket = request.method === 'PUT' ? 'put' : 'general';
       if (!(await rateLimitOk(request, env, bucket))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handleAtlas(atlasMatch[1], request, env, ctx);
+    }
+
+    // Loop cache: pre-recorded flocking buffer. Same shape as atlas — GET
+    // is hot (every visitor + every gallery iframe), PUT is cold (only
+    // the first visitor for a given selection records and uploads).
+    const loopMatch = path.match(/^\/api\/loop\/([^/]+)\/?$/);
+    if (loopMatch) {
+      const bucket = request.method === 'PUT' ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      return handleLoop(loopMatch[1], request, env, ctx);
     }
 
     // Preview capture upload/serve. PUT from /embed/<addr> after the sphere
@@ -1368,7 +1464,7 @@ export default {
     // direct testing.
     const previewCapMatch = path.match(/^\/api\/preview-cap\/([^/]+)\/?$/);
     if (previewCapMatch) {
-      const bucket = (request.method === 'PUT' || request.method === 'DELETE') ? 'put' : 'general';
+      const bucket = request.method === 'PUT' ? 'put' : 'general';
       if (!(await rateLimitOk(request, env, bucket))) {
         return errorResponse(429, 'rate limit exceeded', request);
       }
