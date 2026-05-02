@@ -107,6 +107,55 @@
     .manifesto-quote { font-size:38px; margin-bottom:24px; }
     .manifesto-body  { font-size:16px; }
   }
+
+  /* "Try yours" — inline-form variant of /pfp on the landing. The
+     submit handler routes to /pfp/<addr> so the explorer is one
+     keystroke away from the manifesto. */
+  #try .try-lead {
+    font-size:15px; line-height:1.65; color:#9a9aa5; max-width:62ch;
+    margin-bottom:24px;
+  }
+  body.light #try .try-lead { color:#52525b; }
+  .try-form {
+    display:flex; gap:8px; flex-wrap:wrap;
+    max-width:560px;
+    margin-bottom:14px;
+  }
+  .try-input {
+    flex:1 1 280px;
+    padding:13px 16px;
+    border-radius:10px;
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.10);
+    color:#e7e7ea;
+    font:inherit; font-size:14px;
+    font-family:"SF Mono","Menlo",ui-monospace,monospace;
+    letter-spacing:.01em;
+    transition:border-color 140ms, background 140ms;
+  }
+  .try-input::placeholder { color:#7a7a85; }
+  .try-input:focus {
+    outline:none;
+    border-color:#e7e7ea;
+    background:rgba(255,255,255,.06);
+  }
+  body.light .try-input {
+    background:#fff;
+    border-color:rgba(0,0,0,.10);
+    color:#18181b;
+  }
+  body.light .try-input::placeholder { color:#a1a1aa; }
+  body.light .try-input:focus { border-color:#18181b; }
+  .try-form .btn-primary {
+    padding:13px 18px;
+    font-size:13px;
+  }
+  .try-hint {
+    font-size:12.5px; line-height:1.6; color:#7a7a85;
+    max-width:62ch;
+  }
+  body.light .try-hint { color:#71717a; }
+
   section p {
     font-size:15px; line-height:1.65; color:#9a9aa5; max-width:64ch;
   }
@@ -506,8 +555,8 @@
           <a href="https://opensea.io/collection/dustopia" target="_blank" rel="noopener" class="btn btn-primary">
             Mint on OpenSea <span class="arrow">→</span>
           </a>
-          <a href="/configure" class="btn btn-ghost">
-            Configure your token <span class="arrow">→</span>
+          <a href="/pfp" class="btn btn-ghost">
+            Try with your wallet <span class="arrow">→</span>
           </a>
         </div>
       </div>
@@ -524,6 +573,30 @@
       its own orbit. The sphere rearranges itself the moment a token enters
       or leaves the wallet. It is not a snapshot. It is an autobiography
       that keeps writing itself.
+    </p>
+  </div>
+</section>
+
+<section id="try">
+  <div class="wrap">
+    <h2>Try yours.</h2>
+    <p class="try-lead">
+      Drop in any Ethereum address or ENS name and render the sphere of that
+      wallet. Save the still as a 4096&times;4096 PFP, the loop as a 12&nbsp;s MP4,
+      or just look around.
+    </p>
+    <form id="tryForm" class="try-form" autocomplete="off">
+      <input id="tryInput" class="try-input" type="text"
+        placeholder="vitalik.eth or 0x…"
+        spellcheck="false" autocapitalize="none" autocorrect="off">
+      <button class="btn btn-primary" type="submit">
+        Render <span class="arrow">→</span>
+      </button>
+    </form>
+    <p class="try-hint">
+      Wallets with hundreds of NFTs take 30&ndash;60 seconds the first time.
+      Big collectors like <span class="mono">cozomomedici.eth</span> are a
+      good demo of how the sphere handles density.
     </p>
   </div>
 </section>
@@ -705,6 +778,22 @@
     if (t) t.addEventListener('click', () => document.body.classList.toggle('nav-open'));
     document.querySelectorAll('.nav-links .nav-link').forEach(a => {
       a.addEventListener('click', () => document.body.classList.remove('nav-open'));
+    });
+  })();
+
+  // "Try yours" form — accepts ENS or 0x and routes to /pfp/<addr>,
+  // which auto-loads via /pfp's existing path-based router. Empty or
+  // obviously-bad input falls back to /pfp without an addr so the
+  // visitor still lands somewhere useful.
+  (function() {
+    const f = document.getElementById('tryForm');
+    const i = document.getElementById('tryInput');
+    if (!f || !i) return;
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = (i.value || '').trim().toLowerCase();
+      const ok = /^0x[0-9a-f]{40}$/.test(v) || /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.eth$/.test(v);
+      location.href = ok ? `/pfp/${encodeURIComponent(v)}` : '/pfp';
     });
   })();
 </script>
