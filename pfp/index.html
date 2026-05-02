@@ -324,13 +324,6 @@
   .spinner span:nth-child(11) { transform:rotate(300deg) translateY(-5px); animation-delay:-0.10s; }
   .spinner span:nth-child(12) { transform:rotate(330deg) translateY(-5px); animation-delay: 0.00s; }
 
-  .footnote {
-    margin-top:36px;
-    font-size:12px; line-height:1.55; color:#7a7a85;
-    max-width:54ch;
-  }
-  body.light .footnote { color:#71717a; }
-
   /* Recently-rendered feed — appears below the main pfp-stage once
      the public list has at least one entry. The same wallet can only
      appear once (most-recent-wins on the worker side). */
@@ -506,10 +499,6 @@
       <p class="mono" id="addrEcho" style="font-size:11px"></p>
     </aside>
   </section>
-
-  <p class="footnote">
-    The PFP is rendered locally in your browser from on-chain wallet data. Nothing is uploaded — when you press Download, the file is generated and saved straight to your machine.
-  </p>
 
   <section class="feed" id="feedSection" hidden>
     <div class="feed-total" id="feedTotal" hidden>
