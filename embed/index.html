@@ -2520,6 +2520,32 @@ async function main() {
   const rowFwd = new Float32Array(N * 4);
   const vbuf   = [0, 0, 0];
 
+  // ── Recorded perfect loop ──────────────────────────────────────
+  // Live flocking is non-periodic — to give the page a guaranteed
+  // 60 s loop (and seamless MP4 export) we run the existing physics
+  // for LOOP_SECONDS into a recording buffer, then play that buffer
+  // back forever. Visual is identical to live flocking by definition
+  // — it IS the recording. The only manufactured part is a 1 s
+  // cross-fade at the seam (last LOOP_FADE_FRAMES frames blended
+  // with the first LOOP_FADE_FRAMES frames) so wrapping from the
+  // end of the buffer to the start doesn't pop.
+  //
+  // Memory cost: LOOP_FRAMES × N × 6 floats × 4 bytes. At 60 s × 60 fps
+  // × 512 tokens that's ~44 MB per sphere. Acceptable on desktop and
+  // most phones; we cap at MAX_TOKENS=512 anyway.
+  const LOOP_SECONDS    = 60;
+  const LOOP_FPS        = 60;
+  const LOOP_FRAMES     = LOOP_SECONDS * LOOP_FPS;
+  const LOOP_FADE_FRAMES = LOOP_FPS;       // 1 s cross-fade
+  const FRAME_DT        = 1 / LOOP_FPS;
+  // Each frame stores N tokens × (3 pos + 3 fwd) floats. Backed by
+  // typed arrays so V8 can hold one big contiguous block.
+  const recPos = new Float32Array(LOOP_FRAMES * N * 3);
+  const recFwd = new Float32Array(LOOP_FRAMES * N * 3);
+  let recordingDone = false;
+  let recFrameIdx   = 0;     // which frame to write next while recording
+  let playFrameIdx  = 0;     // which frame to play next once recording is done
+
   // One-shot signal to a parent frame (the /configure editor) that the
   // sphere has rendered for the first time. Toggled true at the end of
   // the first frame() call so the "updating preview…" badge clears at
@@ -2554,6 +2580,28 @@ async function main() {
     }
     gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, 1, gl.RGB, gl.FLOAT, bigWaveArr);
+
+    if (recordingDone) {
+      // ----- PLAYBACK ----- read pre-recorded frame from the loop
+      // buffer into rowPos/rowFwd. Skips the entire flocking
+      // simulation. Trail in the shader still works because the
+      // history texture keeps getting fresh rows; positions just
+      // come from the recording instead of live physics.
+      const off3 = playFrameIdx * N * 3;
+      for (let i = 0; i < N; i++) {
+        const o4 = i * 4;
+        const o3 = off3 + i * 3;
+        rowPos[o4]   = recPos[o3];
+        rowPos[o4+1] = recPos[o3+1];
+        rowPos[o4+2] = recPos[o3+2];
+        rowPos[o4+3] = 1;
+        rowFwd[o4]   = recFwd[o3];
+        rowFwd[o4+1] = recFwd[o3+1];
+        rowFwd[o4+2] = recFwd[o3+2];
+        rowFwd[o4+3] = 1;
+      }
+      playFrameIdx = (playFrameIdx + 1) % LOOP_FRAMES;
+    } else {
 
     // ----- flock pre-pass: compute per-collection centroid + average heading -----
     // (Cheap: one loop over tokens grouped by collection, O(N).)
@@ -2695,6 +2743,46 @@ async function main() {
       rowPos[off]   = tok.pos[0];     rowPos[off+1] = tok.pos[1];     rowPos[off+2] = tok.pos[2];     rowPos[off+3] = 1;
       rowFwd[off]   = tok.forward[0]; rowFwd[off+1] = tok.forward[1]; rowFwd[off+2] = tok.forward[2]; rowFwd[off+3] = 1;
     }
+
+    // ----- capture this frame into the loop buffer -----
+    // Once recFrameIdx hits LOOP_FRAMES we've got our 60-second
+    // recording; finalise (cross-fade the seam) and switch to
+    // playback. From that point on the per-particle physics block
+    // above is skipped forever — pure replay.
+    {
+      const off3 = recFrameIdx * N * 3;
+      for (let i = 0; i < N; i++) {
+        const o4 = i * 4;
+        const o3 = off3 + i * 3;
+        recPos[o3]   = rowPos[o4];
+        recPos[o3+1] = rowPos[o4+1];
+        recPos[o3+2] = rowPos[o4+2];
+        recFwd[o3]   = rowFwd[o4];
+        recFwd[o3+1] = rowFwd[o4+1];
+        recFwd[o3+2] = rowFwd[o4+2];
+      }
+      recFrameIdx++;
+      if (recFrameIdx >= LOOP_FRAMES) {
+        // Cross-fade the last LOOP_FADE_FRAMES frames toward
+        // frame 0 so wrapping playFrameIdx LOOP_FRAMES-1 → 0
+        // doesn't pop. Linear ramp from α=0 (start of fade) to
+        // α=1 (last frame, ≡ frame 0).
+        const fade = LOOP_FADE_FRAMES;
+        const samples = N * 3;
+        for (let k = 0; k < fade; k++) {
+          const alpha   = (k + 1) / fade;
+          const fadeOff = (LOOP_FRAMES - fade + k) * samples;
+          const startOff = 0;  // blend toward frame 0
+          for (let i = 0; i < samples; i++) {
+            recPos[fadeOff + i] = recPos[fadeOff + i] * (1 - alpha) + recPos[startOff + i] * alpha;
+            recFwd[fadeOff + i] = recFwd[fadeOff + i] * (1 - alpha) + recFwd[startOff + i] * alpha;
+          }
+        }
+        recordingDone = true;
+        playFrameIdx  = 0;
+      }
+    }
+    } // end !recordingDone
 
     // advance ring
     ringHead = (ringHead + 1) % HISTORY_LEN;
