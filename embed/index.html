@@ -326,42 +326,28 @@ const GRID             = _GRID_OVERRIDE || (LANDING_MODE ? 128 : (IS_MOBILE ? 12
 // pos/fwd RGBA32F textures, which previously dominated tab usage.
 const HISTORY_LEN      = LANDING_MODE ? 144 : (IS_MOBILE ? 144 : 208); // ≥ GRID + small slack
 const LANE_WIDTH       = 0.32 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical across GRID changes)
-const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
 // Calm-portrait default. Earlier passes had a heavy windswept look
 // (SHEAR 0.55, WIND 0.014/0.004) that smeared individual NFT thumbnails
 // into a uniform blur. Adopting the PFP values globally: zero shear,
-// zero wind, tiny residual wave so the surface still breathes. Result
-// is a ribboned sphere where each holding is a recognisable colour
-// band. PFP / MP4 captures still set _PFP — the flag now only gates
-// theme/upload/DPR overrides, not the physics constants.
+// zero wind, tiny residual wave so the surface still breathes.
 const _PFP = (typeof window !== 'undefined') && window.__dustopiaPfp === true;
 const SHEAR_FACTOR     = 0;
 const WAVE_AMPLITUDE   = 0.005;
 const WIND_AMP_LOW     = 0;
 const WIND_AMP_HIGH    = 0;
 
-// --- school-of-fish flocking ---
-const FLOCK_ALIGN      = 0.55;    // weight: pull forward toward collection's average heading
-const FLOCK_COHESION   = 0.35;    // weight: pull position toward collection centroid (past a soft radius)
-
-// --- pole-avoidance: prevent clusters from getting stuck spinning in tight
-// circles at the ±Y poles (sphere singularity). When a token's |y| exceeds
-// the threshold, push it back toward the equator. Strength ramps linearly
-// from 0 at the threshold to MAX at the pole.
-const POLE_THRESHOLD   = 0.65;    // ~50° from equator — beyond this, push starts
-const POLE_PUSH_MAX    = 0.55;    // max equator-bias added to vbuf at the pole
-const FLOCK_REST_ARC   = 0.18;    // no cohesion pull within this arc distance (≈10°)
-
-// --- inter-collection separation (Reynolds rule #3): push collections away
-// from each other so they spread evenly across the sphere instead of clumping
-// in one hemisphere. Operates on collection centroids each frame.
-const SEPARATION_RADIUS   = 1.1;   // ≈63° of arc — only push when truly nearby
-const SEPARATION_STRENGTH = 0.20;  // gentler — was 0.45, caused "rocket-stripe" look on close encounters
-
 // --- collection-wide big waves ---
 const BIG_WAVE_MIN     = 5;                  // collections with ≥ this many tokens get synced waves
 const BIG_WAVE_AMP     = WAVE_AMPLITUDE * 2.6; // ~2.6× per-token amplitude
-const BIG_WAVE_FREQ    = 0.6;                // slower than per-token wave
+// Loop length for the deterministic parametric scenario. All time-
+// varying phenomena (flock orbits, big-wave, radius breathing) are
+// quantised to integer cycles per LOOP_PERIOD so state at t=0 ≡
+// state at t=LOOP_PERIOD. 60 s feels long enough that the loop
+// doesn't read as repetitive but short enough for an MP4 export.
+const LOOP_PERIOD      = 60.0;
+// 6 cycles per loop ≈ 0.628 rad/s, close to the previous 0.6 rad/s
+// hand-tuned value but exactly periodic on LOOP_PERIOD.
+const BIG_WAVE_FREQ    = (6 * 2 * Math.PI) / LOOP_PERIOD;
 const ATLAS_TILES_ROW  = 32;
 const SPHERE_FACTOR    = 0.032;  // halved from 0.064 — denser packing
 const SPHERE_SCALE_A   = 0.42;
@@ -1872,7 +1858,15 @@ async function main() {
   // 6) INIT TOKEN STATE (CPU) — cluster by collection + flocking setup
   // =============================================================
   const WALLET_ADDR = liveWalletAddr;
-  let rngSeed = seedFromString(WALLET_ADDR);
+  // Mix the selection fingerprint into the RNG seed so a holder
+  // saving a different subset on /configure gets a different
+  // parametric scenario — orbit axes, phases, radii all shuffle.
+  // built.fp is the same selection-derived hash already used for the
+  // R2 atlas cache key, so two configs that produce the same atlas
+  // also produce the same scenario, and vice versa. Empty fp falls
+  // back to wallet-only seeding (default "show all" view).
+  const SEED_KEY = WALLET_ADDR + ':' + (built.fp || '');
+  let rngSeed = seedFromString(SEED_KEY);
   let rng = mulberry32(rngSeed);
 
   // 6a. Group token indices by collection (order-stable from meta.tokens)
@@ -1947,7 +1941,11 @@ async function main() {
       // shells with its own phase + frequency, so flocks slowly migrate between
       // layers. Inner→outer→inner cycle takes ~30-90s per collection (varies).
       cd.radiusPhase = rng() * Math.PI * 2;
-      cd.radiusFreq  = 0.06 + rng() * 0.10;   // 0.06–0.16 rad/s → 40–105s per cycle
+      // Same quantisation discipline: pick 1 or 2 full radius
+      // breathing cycles per LOOP_PERIOD so the shell oscillation
+      // also lines up at t=0 / t=LOOP_PERIOD.
+      const radiusCycles = rng() < 0.6 ? 1 : 2;
+      cd.radiusFreq = radiusCycles * 2 * Math.PI / LOOP_PERIOD;
       cd.radiusOffset = (LAYER_INNER_R + LAYER_OUTER_R) / 2;  // start at mid-shell, animation takes over
 
       // Per-flock drifting orbit axis. Each collection gets its own
@@ -1960,7 +1958,18 @@ async function main() {
       const oax = rng() - 0.5, oay = rng() - 0.5, oaz = rng() - 0.5;
       const oaMag = Math.sqrt(oax*oax + oay*oay + oaz*oaz) + 1e-9;
       cd.orbitAxis = [oax/oaMag, oay/oaMag, oaz/oaMag];
-      cd.orbitFreq = (0.02 + rng() * 0.06) * (rng() < 0.5 ? -1 : 1);
+      // Quantise the orbit rate so every flock completes an integer
+      // number of full revolutions in LOOP_PERIOD seconds — guarantees
+      // pos(t=0) ≡ pos(t=LOOP_PERIOD), the perfect loop the parametric
+      // physics step depends on. Pick from {1, 2} revolutions per loop
+      // and randomise direction; that gives the same visual range as
+      // the previous 0.02-0.08 rad/s window without breaking periodicity.
+      const orbitTurns = rng() < 0.5 ? 1 : 2;
+      cd.orbitFreq = (orbitTurns * 2 * Math.PI / LOOP_PERIOD)
+                   * (rng() < 0.5 ? -1 : 1);
+      // Per-flock starting phase along the orbit so different collections
+      // aren't all at angle 0 at t=0.
+      cd.orbitPhase = rng() * Math.PI * 2;
     }
 
     // 6d. Spawn each token clustered near its collection seed
@@ -2000,6 +2009,12 @@ async function main() {
       tokens[i].pos[0] = px; tokens[i].pos[1] = py; tokens[i].pos[2] = pz;
       tokens[i].forward[0] = fwx/fwm; tokens[i].forward[1] = fwy/fwm; tokens[i].forward[2] = fwz/fwm;
       tokens[i].phaseSeed = rng() * 6.2831853;   // proper 2π range
+      // Snapshot the spawn pose. Per-frame parametric motion below
+      // will rotate the SPAWN around the flock's orbit axis instead
+      // of integrating Reynolds flocking forces — same orbital
+      // behaviour, deterministic, and perfectly loops at 60 s.
+      tokens[i].spawnPos = [px, py, pz];
+      tokens[i].spawnFwd = [fwx/fwm, fwy/fwm, fwz/fwm];
     }
   }
   seedCollectionsAndTokens();
@@ -2037,7 +2052,13 @@ async function main() {
     orbitAxisArr[i*4]     = ax[0];
     orbitAxisArr[i*4 + 1] = ax[1];
     orbitAxisArr[i*4 + 2] = ax[2];
-    orbitAxisArr[i*4 + 3] = cd.orbitFreq;
+    // Orbit rotation is now applied on the CPU per-frame so the
+    // motion-blur trail in the shader gets each history step's
+    // already-rotated position. Setting w=0 makes the shader's
+    // `pos × cos(0) + cross × sin(0) + axis × dot × 0 = pos`
+    // collapse to identity. Axis kept around in case future code
+    // wants to read it from this texture.
+    orbitAxisArr[i*4 + 3] = 0;
   }
   const orbitAxisTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, orbitAxisTex);
@@ -2074,51 +2095,7 @@ async function main() {
   let ringHead = HISTORY_LEN - 1;
 
   // =============================================================
-  // 7) TANGENT FLOW (CPU)
-  // =============================================================
-  function tangentFlow(px, py, pz, t, out) {
-    // Global circulation — weakened to leave room for turbulence
-    const a1x = Math.sin(t*0.04),  a1y = 1.0,                    a1z = Math.cos(t*0.05);
-    const a2x = 1.0,               a2y = Math.sin(t*0.06)*0.6,   a2z = Math.cos(t*0.03);
-    const a3x = Math.cos(t*0.05),  a3y = Math.sin(t*0.04),       a3z = 0.8;
-
-    // Turbulence octave 1 — broad swoops (lower spatial freq)
-    const s1 = 0.95;
-    const tax = Math.sin(px*s1 + t*0.28) + Math.cos(pz*s1*1.1 - t*0.19);
-    const tay = Math.sin(py*s1*0.9 + t*0.24) + Math.cos(px*s1*0.8 - t*0.21);
-    const taz = Math.cos(px*s1*1.2 + t*0.17) + Math.sin(py*s1*1.1 - t*0.23);
-
-    // Turbulence octave 2 — finer wisps
-    const s2 = 2.7;
-    const tbx = Math.sin(py*s2 + t*0.55) - Math.cos(pz*s2*0.9 + t*0.48);
-    const tby = Math.cos(pz*s2*1.1 + t*0.61) + Math.sin(px*s2 - t*0.52);
-    const tbz = Math.sin(px*s2*0.9 + t*0.46) - Math.cos(py*s2 + t*0.58);
-
-    // Slow breathing wind — one big "gust" vector that drifts over time
-    const gx = Math.sin(t*0.11) * 0.9 + Math.cos(t*0.07) * 0.4;
-    const gy = Math.cos(t*0.09) * 0.8 + Math.sin(t*0.13) * 0.35;
-    const gz = Math.sin(t*0.10) * 1.0 - Math.cos(t*0.08) * 0.5;
-
-    // Weighted blend — global down, turbulence up
-    let vx =
-      (a1y*pz - a1z*py)*0.55 + (a2y*pz - a2z*py)*0.32 + (a3y*pz - a3z*py)*0.18
-      + (tay*pz - taz*py)*0.42 + (tby*pz - tbz*py)*0.26
-      + (gy*pz - gz*py)*0.22;
-    let vy =
-      (a1z*px - a1x*pz)*0.55 + (a2z*px - a2x*pz)*0.32 + (a3z*px - a3x*pz)*0.18
-      + (taz*px - tax*pz)*0.42 + (tbz*px - tbx*pz)*0.26
-      + (gz*px - gx*pz)*0.22;
-    let vz =
-      (a1x*py - a1y*px)*0.55 + (a2x*py - a2y*px)*0.32 + (a3x*py - a3y*px)*0.18
-      + (tax*py - tay*px)*0.42 + (tbx*py - tby*px)*0.26
-      + (gx*py - gy*px)*0.22;
-
-    const d = vx*px + vy*py + vz*pz;
-    out[0] = vx - d*px; out[1] = vy - d*py; out[2] = vz - d*pz;
-  }
-
-  // =============================================================
-  // 8) SHADERS
+  // 7) SHADERS
   // =============================================================
   const VS = `#version 300 es
   precision highp float;
@@ -2511,7 +2488,6 @@ async function main() {
   let fpsAcc  = 0, fpsCnt = 0, fpsLast = lastNow;
   const rowPos = new Float32Array(N * 4);
   const rowFwd = new Float32Array(N * 4);
-  const vbuf   = [0, 0, 0];
 
   // One-shot signal to a parent frame (the /configure editor) that the
   // sphere has rendered for the first time. Toggled true at the end of
@@ -2548,145 +2524,73 @@ async function main() {
     gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, 1, gl.RGB, gl.FLOAT, bigWaveArr);
 
-    // ----- flock pre-pass: compute per-collection centroid + average heading -----
-    // (Cheap: one loop over tokens grouped by collection, O(N).)
+    // ----- parametric position step -----
+    // Replaced the Reynolds flocking simulation (cohesion / alignment /
+    // separation / pole-avoid + per-frame integration) with a closed-form
+    // parametric path. Each token's position at time t is its spawn pose
+    // rotated around the flock's orbit axis by (t × orbitFreq + orbitPhase),
+    // wrapped at LOOP_PERIOD. Forward = tangent to the orbit (cross axis,
+    // pos) so the motion-blur trail in the shader still points along the
+    // path the particle is travelling.
+    //
+    // Why this works visually:
+    //   - flocks already had per-collection orbit axes + rates, so the
+    //     dominant motion (whole flock precessing around its own axis) is
+    //     identical to before.
+    //   - the cluster shape inside each flock is preserved exactly by
+    //     using the spawn pose as the rotation source.
+    //   - emergent flocking jitter is gone, but the wind/wave/big-wave
+    //     modulation in the shader still gives every particle its own
+    //     subtle tangent oscillation.
+    //
+    // Why this is cheaper:
+    //   - O(N) instead of O(N) + O(N) flock pre-pass + O(C²) separation +
+    //     N × (cohesion/align/separation/pole/integration) work.
+    //   - No CPU centroid / avgFwd computation. No velocity blending.
+    //   - One Rodrigues rotation per token per frame.
+    //
+    // Why it loops perfectly:
+    //   - All freqs are quantised to integer cycles per LOOP_PERIOD.
+    //   - Wrap t at LOOP_PERIOD so trig args stay in [0, 2π·k).
+    const tWrap = t - Math.floor(t / LOOP_PERIOD) * LOOP_PERIOD;
     for (let ci = 0; ci < collectionData.length; ci++) {
-      const cd = collectionData[ci];
-      let cx = 0, cy = 0, cz = 0, ax = 0, ay = 0, az = 0;
-      const idxs = cd.indices;
-      for (let k = 0; k < idxs.length; k++) {
-        const tk = tokens[idxs[k]];
-        cx += tk.pos[0]; cy += tk.pos[1]; cz += tk.pos[2];
-        ax += tk.forward[0]; ay += tk.forward[1]; az += tk.forward[2];
-      }
-      cd.activeCount = idxs.length;
-      // Project centroid back onto the sphere
-      const cm = Math.sqrt(cx*cx + cy*cy + cz*cz) + 1e-9;
-      cd.centroid[0] = cx/cm; cd.centroid[1] = cy/cm; cd.centroid[2] = cz/cm;
-      const am = Math.sqrt(ax*ax + ay*ay + az*az) + 1e-9;
-      cd.avgFwd[0] = ax/am; cd.avgFwd[1] = ay/am; cd.avgFwd[2] = az/am;
+      collectionData[ci].activeCount = collectionData[ci].indices.length;
     }
-
-    // ----- inter-collection separation pre-pass (Reynolds #3) -----
-    // For each collection, sum repulsive vectors from every OTHER collection
-    // whose centroid is closer than SEPARATION_RADIUS arc-distance. Strength
-    // falls off with squared distance. Result is projected onto the tangent
-    // plane and applied to all tokens of the collection in the physics step.
-    // Cost: O(C²) where C = collection count. ~50² = 2500 ops/frame, trivial.
-    const C = collectionData.length;
-    for (let ci = 0; ci < C; ci++) {
-      const a = collectionData[ci];
-      let sx = 0, sy = 0, sz = 0;
-      for (let cj = 0; cj < C; cj++) {
-        if (cj === ci) continue;
-        const b = collectionData[cj];
-        // Same shell? small bonus weight (closer in 3D, same orbit conflict)
-        const dx = a.centroid[0] - b.centroid[0];
-        const dy = a.centroid[1] - b.centroid[1];
-        const dz = a.centroid[2] - b.centroid[2];
-        const d2 = dx*dx + dy*dy + dz*dz;
-        if (d2 > SEPARATION_RADIUS * SEPARATION_RADIUS) continue;
-        const d = Math.sqrt(d2) + 1e-6;
-        // Smooth quadratic falloff: 0 at edge of radius, 1 at center.
-        // Replaces the old inverse-square spike that caused "rocket-stripe"
-        // bursts when collections nearly touched.
-        const t = 1 - d / SEPARATION_RADIUS;
-        const w = t * t;
-        sx += (dx / d) * w;
-        sy += (dy / d) * w;
-        sz += (dz / d) * w;
-      }
-      // Project onto tangent plane at A's centroid
-      const ax2 = a.centroid[0], ay2 = a.centroid[1], az2 = a.centroid[2];
-      const sd = sx*ax2 + sy*ay2 + sz*az2;
-      sx -= sd*ax2; sy -= sd*ay2; sz -= sd*az2;
-      a.separation[0] = sx;
-      a.separation[1] = sy;
-      a.separation[2] = sz;
-    }
-
-    // ----- physics step -----
     for (let i = 0; i < N; i++) {
       const tok = tokens[i];
       const off = i * 4;
-      tangentFlow(tok.pos[0], tok.pos[1], tok.pos[2], t + tok.phaseSeed, vbuf);
+      const cd  = collectionData[collectionIdx[i]];
 
-      // ----- flocking: cohesion toward collection centroid + alignment to avgFwd -----
-      const cd = collectionData[collectionIdx[i]];
-      if (cd.activeCount > 1) {
-        const px = tok.pos[0], py = tok.pos[1], pz = tok.pos[2];
-        // cohesion: vector from pos toward centroid, tangent-projected
-        let chx = cd.centroid[0] - px;
-        let chy = cd.centroid[1] - py;
-        let chz = cd.centroid[2] - pz;
-        const chd = chx*px + chy*py + chz*pz;
-        chx -= chd*px; chy -= chd*py; chz -= chd*pz;
-        const chm = Math.sqrt(chx*chx + chy*chy + chz*chz);
-        if (chm > FLOCK_REST_ARC) {
-          // Only pull once we've drifted past the rest radius, and soften right at the edge.
-          const falloff = (chm - FLOCK_REST_ARC) / chm;
-          vbuf[0] += chx * falloff * FLOCK_COHESION;
-          vbuf[1] += chy * falloff * FLOCK_COHESION;
-          vbuf[2] += chz * falloff * FLOCK_COHESION;
-        }
-        // alignment: collection's average heading, tangent-projected
-        let alx = cd.avgFwd[0], aly = cd.avgFwd[1], alz = cd.avgFwd[2];
-        const ald = alx*px + aly*py + alz*pz;
-        alx -= ald*px; aly -= ald*py; alz -= ald*pz;
-        vbuf[0] += alx * FLOCK_ALIGN;
-        vbuf[1] += aly * FLOCK_ALIGN;
-        vbuf[2] += alz * FLOCK_ALIGN;
-      }
+      // Rodrigues' rotation: rotate spawn pos around flock orbit axis.
+      const ang = tWrap * cd.orbitFreq + cd.orbitPhase;
+      const c   = Math.cos(ang);
+      const s   = Math.sin(ang);
+      const ax  = cd.orbitAxis[0], ay = cd.orbitAxis[1], az = cd.orbitAxis[2];
+      const sp  = tok.spawnPos;
+      const dot = ax*sp[0] + ay*sp[1] + az*sp[2];
+      const omc = 1 - c;
 
-      // Inter-collection separation: shared push from neighbouring centroids,
-      // applied uniformly to every token in the collection so the whole flock
-      // drifts away from crowded neighbours together.
-      vbuf[0] += cd.separation[0] * SEPARATION_STRENGTH;
-      vbuf[1] += cd.separation[1] * SEPARATION_STRENGTH;
-      vbuf[2] += cd.separation[2] * SEPARATION_STRENGTH;
+      const nx = sp[0]*c + (ay*sp[2] - az*sp[1])*s + ax*dot*omc;
+      const ny = sp[1]*c + (az*sp[0] - ax*sp[2])*s + ay*dot*omc;
+      const nz = sp[2]*c + (ax*sp[1] - ay*sp[0])*s + az*dot*omc;
 
-      // Pole avoidance: push toward equator when |y| > POLE_THRESHOLD.
-      // The slight non-tangent component is absorbed when pos is renormalized
-      // to the unit sphere a few lines below.
-      const ay = Math.abs(tok.pos[1]);
-      if (ay > POLE_THRESHOLD) {
-        const k = (ay - POLE_THRESHOLD) / (1 - POLE_THRESHOLD);  // 0 at threshold → 1 at pole
-        vbuf[1] -= Math.sign(tok.pos[1]) * k * POLE_PUSH_MAX;
-      }
+      tok.pos[0] = nx; tok.pos[1] = ny; tok.pos[2] = nz;
 
-      const vm = Math.sqrt(vbuf[0]*vbuf[0] + vbuf[1]*vbuf[1] + vbuf[2]*vbuf[2]) + 1e-9;
-      let fx = vbuf[0]/vm, fy = vbuf[1]/vm, fz = vbuf[2]/vm;
+      // Forward = tangent to the orbit at this position (cross axis × pos),
+      // sign flipped if orbitFreq is negative so the trail points along
+      // the direction of travel rather than opposite to it.
+      let fx = ay*nz - az*ny;
+      let fy = az*nx - ax*nz;
+      let fz = ax*ny - ay*nx;
+      const fm = Math.sqrt(fx*fx + fy*fy + fz*fz) + 1e-9;
+      const sign = cd.orbitFreq >= 0 ? 1 : -1;
+      fx = (fx / fm) * sign;
+      fy = (fy / fm) * sign;
+      fz = (fz / fm) * sign;
+      tok.forward[0] = fx; tok.forward[1] = fy; tok.forward[2] = fz;
 
-      let nx = tok.pos[0] + fx*ADVECT_SPEED;
-      let ny = tok.pos[1] + fy*ADVECT_SPEED;
-      let nz = tok.pos[2] + fz*ADVECT_SPEED;
-      const m = Math.sqrt(nx*nx + ny*ny + nz*nz);
-      nx/=m; ny/=m; nz/=m;
-      tok.pos[0]=nx; tok.pos[1]=ny; tok.pos[2]=nz;
-
-      // reproject forward onto new tangent
-      const d2 = fx*nx + fy*ny + fz*nz;
-      fx -= d2*nx; fy -= d2*ny; fz -= d2*nz;
-      let fm2 = Math.sqrt(fx*fx + fy*fy + fz*fz);
-      if (fm2 < 1e-6) {
-        fx = tok.forward[0]; fy = tok.forward[1]; fz = tok.forward[2];
-        const d3 = fx*nx + fy*ny + fz*nz;
-        fx -= d3*nx; fy -= d3*ny; fz -= d3*nz;
-        fm2 = Math.sqrt(fx*fx + fy*fy + fz*fz) + 1e-6;
-      }
-      fx/=fm2; fy/=fm2; fz/=fm2;
-
-      const blend = 0.22;
-      let sx = tok.forward[0]*(1-blend) + fx*blend;
-      let sy = tok.forward[1]*(1-blend) + fy*blend;
-      let sz = tok.forward[2]*(1-blend) + fz*blend;
-      const sd = sx*nx + sy*ny + sz*nz;
-      sx -= sd*nx; sy -= sd*ny; sz -= sd*nz;
-      const sm = Math.sqrt(sx*sx + sy*sy + sz*sz) + 1e-9;
-      tok.forward[0]=sx/sm; tok.forward[1]=sy/sm; tok.forward[2]=sz/sm;
-
-      rowPos[off]   = tok.pos[0];     rowPos[off+1] = tok.pos[1];     rowPos[off+2] = tok.pos[2];     rowPos[off+3] = 1;
-      rowFwd[off]   = tok.forward[0]; rowFwd[off+1] = tok.forward[1]; rowFwd[off+2] = tok.forward[2]; rowFwd[off+3] = 1;
+      rowPos[off]   = nx; rowPos[off+1] = ny; rowPos[off+2] = nz; rowPos[off+3] = 1;
+      rowFwd[off]   = fx; rowFwd[off+1] = fy; rowFwd[off+2] = fz; rowFwd[off+3] = 1;
     }
 
     // advance ring
