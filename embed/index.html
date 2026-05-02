@@ -223,9 +223,7 @@
     if (params.get('landing') === '1') window.__dustopiaLanding = true;
     // PFP-generator mode: forces pure-white background, clamps theme to
     // light, and exposes a postMessage handler that captures the live
-    // stage at 2000×2000 PNG for use as a Twitter/Telegram avatar. Same
-    // upload-skipping discipline as landing/nocache so the playground
-    // doesn't pollute R2 with avatar drafts.
+    // stage at 4096×4096 PNG for use as a Twitter/Telegram avatar.
     if (params.get('pfp') === '1') window.__dustopiaPfp = true;
     const selRaw = params.get('sel');
     if (selRaw) {
@@ -317,12 +315,12 @@ const _SIZE_MUL_OVERRIDE = (typeof window !== 'undefined' && (() => {
     if (!Number.isFinite(v)) return null;
     return Math.max(0.05, Math.min(3.0, v));
   } catch { return null; }
-})()) || 1.5;
-// Default size multiplier 1.5 (was 1.0). The shader's base ×1.86
-// "denser packing" constant aimed for ~86% pixel overlap between
-// neighbouring particles, but at the current LANE_WIDTH the eye
-// still picked up gaps between visible rows. 1.5 closes those
-// gaps without losing thumbnail detail. Override via ?ps=N.
+})()) || 2.0;
+// Default sprite size multiplier 2.0. The shader's base ×1.86
+// packing constant assumes denser GRID; at the current 192² with
+// slow orbits the eye still picks up gaps between visible rows
+// even at 1.5×. 2.0 closes them without smearing thumbnails.
+// Override via ?ps=N for the /test bench.
 
 const GRID             = _GRID_OVERRIDE || (LANDING_MODE ? 128 : (IS_MOBILE ? 128 : 192));  // 192² = 36864 particles per image; mobile 128² = 16384; landing 128² (was 96²) for crisper hero
 // HISTORY_LEN was sized for SHEAR_FACTOR=0.55 (needed GRID + GRID·0.55
