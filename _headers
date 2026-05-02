@@ -7,11 +7,12 @@
   # esc(); CSP is the safety net. 'unsafe-inline' on script-src and
   # style-src is required because every page is a zero-build single-file
   # app with inline <script>/<style>. img-src allows https: for the
-  # Alchemy CDN's rotating thumbnail hosts. connect-src locks XHR to our
-  # backends + the ENS resolver. frame-ancestors permits OpenSea (and
-  # subdomains) to iframe /embed without exposing us to third-party
-  # clickjacking.
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' blob:; connect-src 'self' https://api.dustopia.xyz https://api.ensideas.com; frame-src 'self'; frame-ancestors 'self' https://opensea.io https://*.opensea.io https://testnets.opensea.io https://*.seadn.io; base-uri 'self'; form-action 'self'
+  # Alchemy CDN's rotating thumbnail hosts. style-src + font-src whitelist
+  # Google Fonts (Inter + Instrument Serif) loaded from every page head.
+  # connect-src locks XHR to our backends + the ENS resolver.
+  # frame-ancestors permits OpenSea (and subdomains) to iframe /embed
+  # without exposing us to third-party clickjacking.
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https: data: blob:; media-src 'self' blob:; connect-src 'self' https://api.dustopia.xyz https://api.ensideas.com; frame-src 'self'; frame-ancestors 'self' https://opensea.io https://*.opensea.io https://testnets.opensea.io https://*.seadn.io; base-uri 'self'; form-action 'self'
   Referrer-Policy: strict-origin-when-cross-origin
   X-Content-Type-Options: nosniff
   Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
