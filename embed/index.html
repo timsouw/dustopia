@@ -328,7 +328,7 @@ const GRID             = _GRID_OVERRIDE || (LANDING_MODE ? 128 : (IS_MOBILE ? 12
 // for camera reveals. Halving this halves the GPU memory of the two
 // pos/fwd RGBA32F textures, which previously dominated tab usage.
 const HISTORY_LEN      = LANDING_MODE ? 144 : (IS_MOBILE ? 144 : 208); // ≥ GRID + small slack
-const LANE_WIDTH       = 0.32 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical across GRID changes)
+const LANE_WIDTH       = 0.16 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.16 rad. Halved from the previous 0.32 to give every NFT band ~half the angular footprint, leaving visible breathing room between bands. Keeps thumbnail detail because u_sizeMul defaults to 2.0 (per-particle pixel size unchanged from the 0.32+1.0 era).
 const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
 // Calm-portrait default. Earlier passes had a heavy windswept look
 // (SHEAR 0.55, WIND 0.014/0.004) that smeared individual NFT thumbnails
@@ -1201,13 +1201,21 @@ function diverseSlice(candidates, cap) {
     if (!arr) { arr = []; byContract.set(key, arr); }
     arr.push(c);
   }
+  // Hard cap on tokens per collection. Even when a wallet has 500
+  // CryptoPunks, the sphere shows at most 4 of them — the rest of
+  // the slots go to other collections. Without this a punk-heavy
+  // wallet still drowns the visual in punks because round-robin
+  // keeps coming back to that collection while other collections
+  // exhaust their depth. Skip the cap for very narrow wallets
+  // (1-2 collections) so a pure-punk wallet still fills the sphere.
+  const PER_COLLECTION_CAP = byContract.size >= 3 ? 4 : Infinity;
   const out = [];
   let depth = 0;
   let progressed = true;
   while (out.length < cap && progressed) {
     progressed = false;
     for (const arr of byContract.values()) {
-      if (depth < arr.length) {
+      if (depth < arr.length && depth < PER_COLLECTION_CAP) {
         out.push(arr[depth]);
         progressed = true;
         if (out.length >= cap) break;
