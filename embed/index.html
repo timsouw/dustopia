@@ -2793,7 +2793,7 @@ async function main() {
       firstPaintSent = true;
       try {
         if (window.parent && window.parent !== window) {
-          window.parent.postMessage({ type: 'dustopia:built' }, location.origin);
+          window.parent.postMessage({ type: 'dustopia:built', wallet: liveWalletAddr }, location.origin);
         }
       } catch { /* cross-origin parent or sandbox — silently ignore */ }
     }
@@ -2847,7 +2847,7 @@ async function main() {
         firstPaintSent = true;
         try {
           if (window.parent && window.parent !== window) {
-            window.parent.postMessage({ type: 'dustopia:built' }, location.origin);
+            window.parent.postMessage({ type: 'dustopia:built', wallet: liveWalletAddr }, location.origin);
           }
         } catch { /* cross-origin parent or sandbox — silently ignore */ }
       }
