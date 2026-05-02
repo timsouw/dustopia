@@ -2509,6 +2509,18 @@ async function main() {
   let simTime = 0;            // accumulated simulation time (seconds)
   let lastNow = performance.now();
   let fpsAcc  = 0, fpsCnt = 0, fpsLast = lastNow;
+  // Physics throttle. Render runs every rAF (60 fps display); the
+  // CPU flocking step runs every other frame (~30 Hz). The shader
+  // does its own time-based motion (orbit, wind, wave, big-wave,
+  // motion-blur trails sampled from the history texture) every
+  // frame, so visually nothing chunks — only the rate at which
+  // particles are pushed by Reynolds forces drops. To keep the
+  // per-second motion identical, the integration step is doubled
+  // on the frames it does run (2× ADVECT_SPEED + the single-frame
+  // forces are integrated over twice the dt). Halves the heaviest
+  // CPU work without touching the visual.
+  let physTick = 0;
+  const PHYS_EVERY = 2;
   const rowPos = new Float32Array(N * 4);
   const rowFwd = new Float32Array(N * 4);
   const vbuf   = [0, 0, 0];
@@ -2547,6 +2559,16 @@ async function main() {
     }
     gl.bindTexture(gl.TEXTURE_2D, bigWaveTex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, 1, gl.RGB, gl.FLOAT, bigWaveArr);
+
+    // Skip the heavy CPU flocking + texture upload on alternating
+    // frames. Render still runs every rAF; the shader's time-based
+    // wind/wave/orbit/big-wave continue smoothly because they read
+    // u_t each frame. Only the per-particle Reynolds forces and the
+    // history-texture write get throttled, which the eye doesn't
+    // notice past ~30 Hz update rate.
+    const runPhysics = (physTick % PHYS_EVERY) === 0;
+    physTick++;
+    if (runPhysics) {
 
     // ----- flock pre-pass: compute per-collection centroid + average heading -----
     // (Cheap: one loop over tokens grouped by collection, O(N).)
@@ -2657,9 +2679,11 @@ async function main() {
       const vm = Math.sqrt(vbuf[0]*vbuf[0] + vbuf[1]*vbuf[1] + vbuf[2]*vbuf[2]) + 1e-9;
       let fx = vbuf[0]/vm, fy = vbuf[1]/vm, fz = vbuf[2]/vm;
 
-      let nx = tok.pos[0] + fx*ADVECT_SPEED;
-      let ny = tok.pos[1] + fy*ADVECT_SPEED;
-      let nz = tok.pos[2] + fz*ADVECT_SPEED;
+      // Step doubled because physics runs at 1/PHYS_EVERY of the
+      // render rate; PHYS_EVERY = 2 today.
+      let nx = tok.pos[0] + fx*ADVECT_SPEED*PHYS_EVERY;
+      let ny = tok.pos[1] + fy*ADVECT_SPEED*PHYS_EVERY;
+      let nz = tok.pos[2] + fz*ADVECT_SPEED*PHYS_EVERY;
       const m = Math.sqrt(nx*nx + ny*ny + nz*nz);
       nx/=m; ny/=m; nz/=m;
       tok.pos[0]=nx; tok.pos[1]=ny; tok.pos[2]=nz;
@@ -2696,6 +2720,8 @@ async function main() {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, ringHead, N, 1, gl.RGBA, gl.FLOAT, rowPos);
     gl.bindTexture(gl.TEXTURE_2D, fwdTex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, ringHead, N, 1, gl.RGBA, gl.FLOAT, rowFwd);
+    } // end runPhysics
+
 
     const activeN = N;
 
