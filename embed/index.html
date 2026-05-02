@@ -1439,7 +1439,7 @@ async function main() {
   // if R2 already has a capture for this wallet (HEAD check inside) and
   // skipped entirely in editor preview mode so drafts don't overwrite
   // the canonical OpenSea grid image.
-  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaLanding && !window.__dustopiaPfp) {
+  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaLanding) {
     // In fresh mode the holder explicitly asked to overwrite — skip the
     // hasCachedPreview short-circuit so the new capture lands on top of
     // whatever's currently in R2.
@@ -2856,8 +2856,7 @@ async function main() {
       // pfp drafts shouldn't pollute the public cache.
       if (atlasBlob
           && !window.__dustopiaPreview
-          && !window.__dustopiaNocache
-          && !window.__dustopiaPfp) {
+          && !window.__dustopiaNocache) {
         uploadAtlas(liveWalletAddr, built.meta, atlasBlob, built.fp);
       }
     }).catch((e) => {
