@@ -1952,15 +1952,17 @@ async function main() {
 
       // Per-flock drifting orbit axis. Each collection gets its own
       // random unit-vector axis + a slow rotation rate, so flocks no
-      // longer all precess in lockstep around the global Y. Sphere
-      // feels alive without the user dragging — different bands
-      // rotate around different axes at different rates.
-      // Rate ~0.02-0.08 rad/s → 80-300 s per full revolution; sign
-      // randomised so half drift each way.
+      // Rate ~0.008-0.025 rad/s → 250-780 s per full revolution.
+      // Slower than the previous 0.02-0.08 range because at small flock
+      // sizes (5-20 NFTs) the previous rates read as a 2-3 s repeating
+      // cycle in feed thumbnails — felt looped even though the live
+      // sphere isn't actually periodic. With this slower band, even the
+      // fastest flock takes ~4 minutes per full orbit, well past the
+      // ~12 s window the eye spends staring at a thumbnail.
       const oax = rng() - 0.5, oay = rng() - 0.5, oaz = rng() - 0.5;
       const oaMag = Math.sqrt(oax*oax + oay*oay + oaz*oaz) + 1e-9;
       cd.orbitAxis = [oax/oaMag, oay/oaMag, oaz/oaMag];
-      cd.orbitFreq = (0.02 + rng() * 0.06) * (rng() < 0.5 ? -1 : 1);
+      cd.orbitFreq = (0.008 + rng() * 0.017) * (rng() < 0.5 ? -1 : 1);
     }
 
     // 6d. Spawn each token clustered near its collection seed
