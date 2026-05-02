@@ -317,7 +317,12 @@ const _SIZE_MUL_OVERRIDE = (typeof window !== 'undefined' && (() => {
     if (!Number.isFinite(v)) return null;
     return Math.max(0.05, Math.min(3.0, v));
   } catch { return null; }
-})()) || 1.0;
+})()) || 1.5;
+// Default size multiplier 1.5 (was 1.0). The shader's base ×1.86
+// "denser packing" constant aimed for ~86% pixel overlap between
+// neighbouring particles, but at the current LANE_WIDTH the eye
+// still picked up gaps between visible rows. 1.5 closes those
+// gaps without losing thumbnail detail. Override via ?ps=N.
 
 const GRID             = _GRID_OVERRIDE || (LANDING_MODE ? 128 : (IS_MOBILE ? 128 : 192));  // 192² = 36864 particles per image; mobile 128² = 16384; landing 128² (was 96²) for crisper hero
 // HISTORY_LEN was sized for SHEAR_FACTOR=0.55 (needed GRID + GRID·0.55
