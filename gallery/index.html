@@ -532,7 +532,11 @@
       // can swap to about:blank when the tile scrolls far off-screen
       // (each iframe is a WebGL context — keeping dozens live trips
       // browser limits, especially on iOS Safari).
-      const embedUrl = `/embed/${escHtml(t.owner)}?token=${escHtml(t.tokenId)}&landing=1`;
+      //
+      // No ?landing=1 — that forces GRID=128 while the main canvas
+      // uses GRID=192, and atlases are keyed by grid. Same GRID =
+      // same atlas = guaranteed R2 cache hit.
+      const embedUrl = `/embed/${escHtml(t.owner)}?token=${escHtml(t.tokenId)}`;
       return `
         <div class="tile"
              data-token-id="${escHtml(t.tokenId)}"

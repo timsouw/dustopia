@@ -819,16 +819,19 @@
         totalEl.hidden = false;
       }
       // Per-tile live sphere via iframe — same renderer as /embed,
-      // playing the R2-cached loop. No static WebP / GIF anymore;
-      // the loop blob is shared with the main canvas, so the feed
-      // tile and the main render are guaranteed identical.
-      // ?landing=1 keeps the iframe in low-DPR memory-tight mode
-      // (hero-style) so dozens of tiles don't blow up the page.
+      // playing the R2-cached loop. No static WebP / GIF anymore.
+      // Importantly: NO ?landing=1 here, even though it would give
+      // a smaller atlas. Landing mode forces GRID=128 while the main
+      // canvas uses GRID=192, and atlases are keyed by grid in R2 —
+      // so a landing-mode iframe would always miss the cache the main
+      // canvas just populated and try to rebuild the atlas live (30 s
+      // of image fetches that often hang in iframe throttling).
+      // Default mode = same GRID = guaranteed cache hit.
       ul.innerHTML = list.map(e => `
         <li>
           <a class="feed-link" href="#${e.addr}" data-addr="${e.addr}">
             <div class="feed-thumb">
-              <iframe src="/embed/${e.addr}?landing=1"
+              <iframe src="/embed/${e.addr}"
                       loading="lazy"
                       title="sphere of ${shortAddr(e.addr)}"></iframe>
             </div>
