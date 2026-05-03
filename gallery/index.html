@@ -527,21 +527,21 @@
       const stat = (t.tokens != null && t.collections != null)
         ? `${t.tokens}t · ${t.collections}c`
         : `${escHtml(shortAddr(t.owner))}`;
-      // Live sphere via iframe — same renderer as /embed, playing the
-      // R2-cached loop. data-src holds the real URL so the IO unloader
-      // can swap to about:blank when the tile scrolls far off-screen
-      // (each iframe is a WebGL context — keeping dozens live trips
-      // browser limits, especially on iOS Safari).
-      const embedUrl = `/embed/${escHtml(t.owner)}?token=${escHtml(t.tokenId)}&thumb=1`;
+      // Static animated WebP from preview-cap. Live iframe-per-tile
+      // didn't scale — hundreds of WebGL contexts trip browser caps.
+      // The captured WebP comes from the same renderer that paints the
+      // detail page, so the visual matches without the cost.
+      const previewUrl = `${API_URL}/api/preview/${escHtml(t.tokenId)}`;
       return `
         <div class="tile"
              data-token-id="${escHtml(t.tokenId)}"
              data-owner="${escHtml(t.owner)}"
              title="Dustopia #${escHtml(t.tokenId)}">
-          <iframe title="Dustopia #${escHtml(t.tokenId)}"
-                  src="about:blank"
-                  data-src="${embedUrl}"
-                  loading="lazy"></iframe>
+          <img alt="Dustopia #${escHtml(t.tokenId)}"
+               src="${previewUrl}"
+               data-src="${previewUrl}"
+               loading="lazy"
+               decoding="async">
           <div class="tile-overlay">
             <span class="name">Dustopia #${escHtml(t.tokenId)}</span>
             <span class="sub">${stat}</span>
@@ -551,22 +551,21 @@
     const grid = document.getElementById('grid');
     grid.innerHTML = `<div class="token-grid">${cards}</div>`;
 
-    // Off-screen unloader. Each tile is now a full WebGL iframe — keeping
-    // dozens active trips browser context limits (iOS Safari ~16). When
-    // a tile leaves the viewport (+ rootMargin slack so fast scrolls
-    // don't tear), swap iframe src → about:blank, which destroys the GL
-    // context. Swap back when it's about to come into view.
-    const BLANK_FRAME = 'about:blank';
+    // Off-screen unloader. rootMargin is generous so a fast scroll
+    // doesn't tear animations on tiles re-entering the viewport.
+    // Animated WebPs that scroll far away get swapped to a 1×1 blank
+    // so the browser frees the WebP decoder; coming back into view
+    // restores the real src.
+    const BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         const tile = e.target;
-        const fr   = tile.querySelector('iframe');
-        if (!fr) continue;
+        const img  = tile.querySelector('img');
+        if (!img) continue;
         if (e.isIntersecting) {
-          if (fr.src !== fr.dataset.src && fr.dataset.src) fr.src = fr.dataset.src;
+          if (img.src !== img.dataset.src) img.src = img.dataset.src;
         } else {
-          // endsWith because some browsers normalize about:blank to a full URL
-          if (!fr.src.endsWith(BLANK_FRAME)) fr.src = BLANK_FRAME;
+          if (img.src !== BLANK_IMG) img.src = BLANK_IMG;
         }
       }
     }, { rootMargin: '600px 0px', threshold: 0 });

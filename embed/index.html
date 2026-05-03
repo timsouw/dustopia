@@ -339,9 +339,11 @@ const _SIZE_MUL_OVERRIDE = (typeof window !== 'undefined' && (() => {
 const GRID             = _GRID_OVERRIDE || 192;
 // HISTORY_LEN was sized for SHEAR_FACTOR=0.55 (needed GRID + GRID·0.55
 // rows). Since SHEAR is now 0, we only need GRID rows + small slack
-// for camera reveals. Halving this halves the GPU memory of the two
-// pos/fwd RGBA32F textures, which previously dominated tab usage.
-const HISTORY_LEN      = LANDING_MODE ? 144 : (IS_MOBILE ? 144 : 208); // ≥ GRID + small slack
+// for camera reveals. Single value across every mode (landing, thumb,
+// mobile, main) so visuals are identical no matter where the embed is
+// loaded — captured video later replays in <video> tags everywhere
+// without divergence.
+const HISTORY_LEN      = 208;
 const LANE_WIDTH       = 0.32 / GRID;           // image arc coverage = GRID·LANE_WIDTH = 0.32 rad (kept identical across GRID changes)
 const ADVECT_SPEED     = 0.013;                 // longer streaks — decoupled from LANE_WIDTH for wind feel
 // Calm-portrait default. Earlier passes had a heavy windswept look
@@ -468,7 +470,11 @@ const ALCH_MAX_PAG = 8;
 const LIVE_TILE    = GRID;           // matches GRID — desktop 192×192, mobile 128×128 (atlas size scales with GRID²)
 const FETCH_CONC   = 12;
 const FETCH_TIMEOUT= 12000;
-const MAX_TOKENS   = LANDING_MODE ? 256 : 512;   // safety ceiling for live render perf; landing trims for hero memory
+// Single value across every mode — landing/thumb used to trim to 256
+// for memory, but with cached-loop playback the per-iframe footprint is
+// already small and identical N across modes guarantees the same
+// loop-blob is reused without an N-mismatch decode reject.
+const MAX_TOKENS   = 512;
 
 const statusEl = () => document.getElementById('status');
 function setStatus(html) {
@@ -935,11 +941,17 @@ async function tryFetchCachedAtlas(addr, fp) {
 // single-frame PNG so the preview pipeline never breaks.
 // =====================================================================
 
-const PREVIEW_SIZE       = 800;            // square, matches metadata SVG viewBox
+// Captured WebP loop served as the canonical thumbnail everywhere
+// (feed, gallery, OpenSea grid). Sized to feel like a real animation,
+// not a 1.5 s stuttery gif. ~6 s loop at ~13 fps reads as continuous
+// motion to the eye while keeping the file under ~3 MB.
+//   80 frames × 75 ms = 6 s loop, ~13 fps
+//   600 px square = OpenSea-grid friendly, ~30-50 KB per WebP frame
+const PREVIEW_SIZE       = 600;
 const PREVIEW_DELAY_MS   = 4500;           // wait for swarm to settle before snapping
-const PREVIEW_FRAMES     = 14;             // total frames in the loop
-const PREVIEW_FRAME_MS   = 110;            // delay between frames (≈9 fps display)
-const PREVIEW_WEBP_Q     = 0.78;           // quality arg to canvas.toBlob('image/webp')
+const PREVIEW_FRAMES     = 80;
+const PREVIEW_FRAME_MS   = 75;
+const PREVIEW_WEBP_Q     = 0.80;
 
 // Returns true ONLY when R2 already holds an animated-WebP capture for this
 // addr; legacy PNG entries from the pre-WebP era return false so the first
@@ -1534,13 +1546,12 @@ async function main() {
   // Default live render: respect device DPR up to 2 on both desktop
   // and mobile.
   const _shorterSide = Math.max(1, Math.min(window.innerWidth, window.innerHeight));
+  // PFP capture mode bumps DPR for a sharp 4 K backbuffer. Everywhere
+  // else we just respect device DPR up to 2 — keeps per-iframe memory
+  // bounded while delivering crisp ribbons on retina displays.
   let DPR = window.__dustopiaPfp
     ? Math.min(8, Math.max(2, Math.ceil(2400 / _shorterSide)))
-    : window.__dustopiaThumb
-      ? 1                              // ~200 px tile, DPR 1 is plenty + halves backbuffer memory
-      : LANDING_MODE
-        ? 1.5
-        : Math.min(window.devicePixelRatio || 1, 2);
+    : Math.min(window.devicePixelRatio || 1, 2);
   let W = 0, H = 0;
   function resize() {
     W = window.innerWidth; H = window.innerHeight;

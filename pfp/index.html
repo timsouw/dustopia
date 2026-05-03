@@ -818,19 +818,21 @@
         totalN.textContent = total.toLocaleString('en-US').replace(/,/g, ' ');
         totalEl.hidden = false;
       }
-      // Per-tile live sphere via iframe — same renderer as /embed,
-      // playing the R2-cached loop. No static WebP / GIF anymore;
-      // the loop blob is shared with the main canvas, so the feed
-      // tile and the main render are guaranteed identical.
-      // ?landing=1 keeps the iframe in low-DPR memory-tight mode
-      // (hero-style) so dozens of tiles don't blow up the page.
+      // Per-tile thumbnail = static animated WebP from preview-cap.
+      // Live iframe-per-tile didn't scale (each is its own WebGL context;
+      // 6+ visible tiles trip browser context limits and burn 1+ GB of
+      // memory). The captured WebP is taken from the same renderer the
+      // main canvas uses, so it looks identical without the cost.
+      // onerror swap to the brand-mark SVG keeps the tile clean when a
+      // wallet has never been rendered yet (404 from preview-cap).
       ul.innerHTML = list.map(e => `
         <li>
           <a class="feed-link" href="#${e.addr}" data-addr="${e.addr}">
             <div class="feed-thumb">
-              <iframe src="/embed/${e.addr}?thumb=1"
-                      loading="lazy"
-                      title="sphere of ${shortAddr(e.addr)}"></iframe>
+              <img src="${API_URL}/api/preview-cap/${e.addr}"
+                   alt="sphere of ${shortAddr(e.addr)}"
+                   loading="lazy" decoding="async"
+                   onerror="this.onerror=null;this.src='${BRAND_MARK_SVG}';">
             </div>
             <div class="feed-meta">
               <span class="feed-addr">${shortAddr(e.addr)}</span>
