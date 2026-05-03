@@ -13,9 +13,14 @@
 // dequantizes and replays.
 
 // ── Loop sizing ─────────────────────────────────────────────────────────
-export const LOOP_FPS         = 30;
+// LOOP_FPS=60 matches the embed's live RAF rate. ADVECT_SPEED in the
+// physics step is applied per-frame, NOT per-time — so baking at 30 fps
+// produced positions that had moved exactly half as much as the embed's
+// live render at 60 fps would have shown over the same simulated time.
+// That's why early v1 blobs looked sparse and barely-moving in playback.
+export const LOOP_FPS         = 60;
 export const LOOP_SECONDS     = 30;
-export const LOOP_FRAMES      = LOOP_FPS * LOOP_SECONDS;     // 900
+export const LOOP_FRAMES      = LOOP_FPS * LOOP_SECONDS;     // 1800
 export const LOOP_FADE_FRAMES = LOOP_FPS;                     // 1 s cross-fade
 export const FRAME_DT         = 1 / LOOP_FPS;
 
@@ -380,7 +385,10 @@ export function runBake(walletAddr, metaTokens) {
 // ── Wire-format encode: 16-byte header + frame-major int16 payload.
 // Mirrors decodeLoopBuffer in embed/index.html. Returns Uint8Array.
 export const LOOP_MAGIC        = 0x4C545344; // 'DSTL' little-endian
-export const LOOP_VERSION      = 1;
+// v2 = LOOP_FPS bumped 30→60 (per-frame ADVECT_SPEED matches embed live).
+// v1 blobs decode-reject in the browser (wrong frame count) and the
+// worker re-bakes them via a header-version check in bakeAndStore.
+export const LOOP_VERSION      = 2;
 export const LOOP_HEADER_BYTES = 16;
 export const LOOP_POS_SCALE    = 16384;
 export const LOOP_FWD_SCALE    = 32767;
