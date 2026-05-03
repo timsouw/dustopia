@@ -866,7 +866,7 @@ async function handleAtlasGet(addr, grid, wantMeta, fp, request, env, ctx) {
   return resp;
 }
 
-async function handleAtlasPut(addr, grid, wantMeta, fp, request, env) {
+async function handleAtlasPut(addr, grid, wantMeta, fp, request, env, ctx) {
   const ct = (request.headers.get('Content-Type') || '').toLowerCase().split(';')[0].trim();
   // Atlas binaries used to be raw RGB (application/octet-stream, optionally
   // gzipped via Content-Encoding). We've moved to WebP-encoded 2D atlas
@@ -976,6 +976,15 @@ async function handleAtlasPut(addr, grid, wantMeta, fp, request, env) {
   }
 
   await env.ATLAS.put(targetKey, buf, { httpMetadata });
+
+  // When the meta JSON for this (addr, fp) lands, kick off a server-side
+  // bake in the background — by the time anyone GETs /api/loop/<addr> the
+  // blob is ready. No-op if the loop already exists. Best-effort: failures
+  // are swallowed because the browser-side recording is still a fallback.
+  if (wantMeta && ctx && typeof ctx.waitUntil === 'function') {
+    ctx.waitUntil(bakeAndStore(addr, fp, env).catch(() => {}));
+  }
+
   return jsonResponse({ ok: true, bytes: buf.byteLength, encoded: isGzipped ? ce : null }, request);
 }
 
@@ -996,7 +1005,7 @@ async function handleAtlas(addr, request, env, ctx) {
     return errorResponse(400, 'invalid fp', request);
   }
   if (request.method === 'GET') return handleAtlasGet(addr, grid, wantMeta, fpRaw, request, env, ctx);
-  if (request.method === 'PUT') return handleAtlasPut(addr, grid, wantMeta, fpRaw, request, env);
+  if (request.method === 'PUT') return handleAtlasPut(addr, grid, wantMeta, fpRaw, request, env, ctx);
   return errorResponse(405, 'method not allowed', request);
 }
 
@@ -1128,6 +1137,107 @@ async function handleLoop(addr, request, env, ctx) {
 }
 
 // =====================================================================
+// SERVER-SIDE BAKE — runs the flock physics deterministically on the
+// worker, writes the resulting loop blob to R2 so visitors never have to
+// record. Triggered by:
+//   - explicit POST /api/bake/<addr>?fp=<fp>
+//   - implicit ctx.waitUntil from atlas PUT (just-built atlas → bake)
+//   - implicit ctx.waitUntil from /api/pfp-feed POST (feed entry added)
+//
+// Idempotent — early-returns when the blob already exists in R2. Reads
+// atlas meta from the same key the renderer reads (so the token order +
+// collection grouping matches exactly what the browser would have seen).
+//
+// Cost (measured locally, V8): ~70 ms for N=50, ~350 ms for N=512. Fits
+// inside a synchronous request, but we still prefer waitUntil where the
+// caller doesn't need the result.
+// =====================================================================
+async function readAtlasMetaForBake(addr, fp, env) {
+  const a = addr.toLowerCase();
+  // Try the same fp first; fall back to the legacy 'all' meta when the
+  // selection-specific one is missing (selection often = full wallet).
+  const candidates = [];
+  if (fp && fp !== 'all') candidates.push(`${a}/192-${fp}.json`);
+  candidates.push(`${a}/192.json`);
+  candidates.push(`${a}/128-${fp}.json`);
+  candidates.push(`${a}/128.json`);
+  for (const key of candidates) {
+    const obj = await env.ATLAS.get(key).catch(() => null);
+    if (!obj) continue;
+    let meta;
+    try { meta = await obj.json(); } catch { continue; }
+    if (meta && Array.isArray(meta.tokens) && meta.tokens.length > 0) return meta;
+  }
+  return null;
+}
+
+async function gzipBytes(u8) {
+  if (typeof CompressionStream !== 'function') return null;
+  try {
+    const cs = new CompressionStream('gzip');
+    const stream = new Blob([u8]).stream().pipeThrough(cs);
+    const out = await new Response(stream).arrayBuffer();
+    return new Uint8Array(out);
+  } catch {
+    return null;
+  }
+}
+
+// runs the actual bake. Returns { ok, reason, bytes? }.
+// Force=true skips the existence check (used to overwrite a stale entry).
+async function bakeAndStore(addr, fp, env, { force = false } = {}) {
+  const key = loopKey(addr, fp);
+  if (!force) {
+    const head = await env.ATLAS.head(key).catch(() => null);
+    if (head) return { ok: true, reason: 'exists', bytes: head.size };
+  }
+  const meta = await readAtlasMetaForBake(addr, fp, env);
+  if (!meta) return { ok: false, reason: 'no atlas meta — atlas must be uploaded first' };
+
+  // Per-address quota — same shape as handleLoopPut, applied here too so
+  // a malicious flood of /api/bake calls can't overshoot the cap.
+  const list = await env.ATLAS.list({
+    prefix: `loop/${addr.toLowerCase()}/`,
+    limit:  LOOP_PER_ADDR_CAP + 1,
+  }).catch(() => null);
+  if (list && list.objects.length >= LOOP_PER_ADDR_CAP) {
+    const exists = list.objects.some(o => o.key === key);
+    if (!exists) return { ok: false, reason: `loop cache cap reached (${LOOP_PER_ADDR_CAP} per address)` };
+  }
+
+  const result = runBake(addr, meta.tokens);
+  const raw    = encodeLoopBlob(result);
+  const gz     = await gzipBytes(raw);
+  const httpMetadata = { contentType: 'application/octet-stream' };
+  let body = raw;
+  if (gz && gz.byteLength < raw.byteLength) {
+    body = gz;
+    httpMetadata.contentEncoding = 'gzip';
+  }
+  if (body.byteLength > LOOP_BIN_MAX) {
+    return { ok: false, reason: `bake produced ${body.byteLength} bytes, over LOOP_BIN_MAX` };
+  }
+  await env.ATLAS.put(key, body, { httpMetadata });
+  return { ok: true, reason: 'baked', bytes: body.byteLength };
+}
+
+async function handleBake(addr, request, env, ctx) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    return errorResponse(400, 'invalid address', request);
+  }
+  if (request.method !== 'POST') return errorResponse(405, 'method not allowed', request);
+  const url = new URL(request.url);
+  const fp  = url.searchParams.get('fp') || 'all';
+  if (fp !== 'all' && !LOOP_FP_RE.test(fp)) {
+    return errorResponse(400, 'invalid fp', request);
+  }
+  const force = url.searchParams.get('force') === '1';
+  const result = await bakeAndStore(addr, fp, env, { force });
+  const status = result.ok ? 200 : 409;
+  return jsonResponse(result, request, { status });
+}
+
+// =====================================================================
 // PER-TOKEN CONFIG — stored in R2 under config/<tokenId>.json. Owner-gated
 // PUT (verified via EIP-191 personal_sign) lets the holder pick which of
 // their NFTs go into the sphere; without a config the renderer falls back
@@ -1162,6 +1272,7 @@ async function handleLoop(addr, request, env, ctx) {
 // Then writes config to R2.
 // =====================================================================
 import { verifyMessage, isAddress, getAddress } from 'viem';
+import { runBake, encodeLoopBlob } from './physics.js';
 
 const CONFIG_REPLAY_WINDOW_MS = 5 * 60 * 1000;     // 5 min
 const CONFIG_MAX_BYTES = 256 * 1024;               // 256 KiB ceiling on body
@@ -1367,7 +1478,7 @@ async function handleFeedGet(request, env) {
   return jsonResponse({ entries: list, total }, request);
 }
 
-async function handleFeedAdd(rawAddr, request, env) {
+async function handleFeedAdd(rawAddr, request, env, ctx) {
   const addr = String(rawAddr || '').toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(addr)) {
     return errorResponse(400, 'invalid address', request);
@@ -1393,6 +1504,15 @@ async function handleFeedAdd(rawAddr, request, env) {
   await env.WALLET_CACHE.put(FEED_KEY, JSON.stringify(trimmed), {
     expirationTtl: FEED_TTL,
   });
+
+  // Pre-warm the loop cache for this address so the iframe in the feed
+  // hits playback immediately. No-op if a loop already exists, and won't
+  // run if there's no atlas meta yet (caller will retry once their atlas
+  // upload finishes — handleAtlasPut also schedules a bake).
+  if (ctx && typeof ctx.waitUntil === 'function') {
+    ctx.waitUntil(bakeAndStore(addr, 'all', env).catch(() => {}));
+  }
+
   return jsonResponse({ ok: true, count: trimmed.length, total }, request);
 }
 
@@ -1448,8 +1568,8 @@ export default {
     }
 
     // Loop cache: pre-recorded flocking buffer. Same shape as atlas — GET
-    // is hot (every visitor + every gallery iframe), PUT is cold (only
-    // the first visitor for a given selection records and uploads).
+    // is hot (every visitor + every gallery iframe), PUT is cold (server-
+    // side bake or, as a fallback, browser-side recording).
     const loopMatch = path.match(/^\/api\/loop\/([^/]+)\/?$/);
     if (loopMatch) {
       const bucket = request.method === 'PUT' ? 'put' : 'general';
@@ -1457,6 +1577,16 @@ export default {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handleLoop(loopMatch[1], request, env, ctx);
+    }
+
+    // Server-side bake: runs flock physics on the worker, writes a loop
+    // blob to R2. POST-only; idempotent (no-op if blob already exists).
+    const bakeMatch = path.match(/^\/api\/bake\/([^/]+)\/?$/);
+    if (bakeMatch) {
+      if (!(await rateLimitOk(request, env, 'put'))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      return handleBake(bakeMatch[1], request, env, ctx);
     }
 
     // Preview capture upload/serve. PUT from /embed/<addr> after the sphere
@@ -1498,7 +1628,7 @@ export default {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       if (request.method !== 'POST') return errorResponse(405, 'method not allowed', request);
-      return handleFeedAdd(feedAddMatch[1], request, env);
+      return handleFeedAdd(feedAddMatch[1], request, env, ctx);
     }
 
 
