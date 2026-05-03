@@ -1037,7 +1037,7 @@ async function handleAtlas(addr, request, env, ctx) {
 // Upload may be Content-Encoding: gzip; we forward as-is so the browser
 // decompresses transparently on GET (mirrors the atlas path).
 // =====================================================================
-const LOOP_BIN_MAX        = 8 * 1024 * 1024;   // 8 MiB ceiling — covers N=512 × 900 frames × 12 bytes (~5.5 MB) with headroom
+const LOOP_BIN_MAX        = 16 * 1024 * 1024;  // 16 MiB ceiling — covers v2 (LOOP_FPS=60, LOOP_FRAMES=1800) at N=512: ~11 MB raw, ~4 MB gzipped, plenty of headroom
 const LOOP_PER_ADDR_CAP   = 16;                // distinct selections per address before we 429 the PUT
 const LOOP_FP_RE          = /^[a-z0-9]{16}$/;
 const LOOP_CACHE_CONTROL  = 'public, max-age=31536000, immutable';
@@ -1188,8 +1188,27 @@ async function gzipBytes(u8) {
 async function bakeAndStore(addr, fp, env, { force = false } = {}) {
   const key = loopKey(addr, fp);
   if (!force) {
-    const head = await env.ATLAS.head(key).catch(() => null);
-    if (head) return { ok: true, reason: 'exists', bytes: head.size };
+    // Read first 5 bytes of the existing blob (R2 supports range reads)
+    // to verify the on-disk version matches our current LOOP_VERSION. If
+    // not, treat it as missing and re-bake. This auto-invalidates blobs
+    // baked by a previous version of physics.js without needing a manual
+    // R2 wipe — frontend GETs old blob → decode-rejects → POSTs bake →
+    // version mismatch → re-bakes with current code.
+    const obj = await env.ATLAS.get(key, { range: { offset: 0, length: 5 } }).catch(() => null);
+    if (obj) {
+      try {
+        const bytes = new Uint8Array(await obj.arrayBuffer());
+        if (bytes.length >= 5) {
+          const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+          const magic = dv.getUint32(0, true);
+          const ver   = dv.getUint8(4);
+          if (magic === LOOP_MAGIC && ver === LOOP_VERSION) {
+            const head = await env.ATLAS.head(key).catch(() => null);
+            return { ok: true, reason: 'exists', bytes: head ? head.size : null };
+          }
+        }
+      } catch { /* fall through to re-bake */ }
+    }
   }
   const meta = await readAtlasMetaForBake(addr, fp, env);
   if (!meta) return { ok: false, reason: 'no atlas meta — atlas must be uploaded first' };
@@ -1272,7 +1291,7 @@ async function handleBake(addr, request, env, ctx) {
 // Then writes config to R2.
 // =====================================================================
 import { verifyMessage, isAddress, getAddress } from 'viem';
-import { runBake, encodeLoopBlob } from './physics.js';
+import { runBake, encodeLoopBlob, LOOP_MAGIC, LOOP_VERSION } from './physics.js';
 
 const CONFIG_REPLAY_WINDOW_MS = 5 * 60 * 1000;     // 5 min
 const CONFIG_MAX_BYTES = 256 * 1024;               // 256 KiB ceiling on body

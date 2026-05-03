@@ -2562,10 +2562,12 @@ async function main() {
   //                   frames u16, tokens u16, posScale f32, fwdScale i16
   //   payload: per frame, per token: pos.xyz fwd.xyz (int16 × 6)
   const LOOP_SECONDS     = 30;
-  const LOOP_FPS         = 30;
-  const LOOP_FRAMES      = LOOP_SECONDS * LOOP_FPS;     // 900
+  const LOOP_FPS         = 60;
+  const LOOP_FRAMES      = LOOP_SECONDS * LOOP_FPS;     // 1800
   const LOOP_MAGIC       = 0x4C545344; // 'DSTL' little-endian
-  const LOOP_VERSION     = 1;
+  // v2 = LOOP_FPS bumped 30→60 to match embed's live RAF rate. v1 blobs
+  // decode-reject and the worker re-bakes them on next bake call.
+  const LOOP_VERSION     = 2;
   const LOOP_HEADER_BYTES = 16;
   const LOOP_FRAME_BYTES  = N * 6 * 2;
   const LOOP_TOTAL_BYTES  = LOOP_HEADER_BYTES + LOOP_FRAMES * LOOP_FRAME_BYTES;
