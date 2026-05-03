@@ -532,7 +532,7 @@
       // can swap to about:blank when the tile scrolls far off-screen
       // (each iframe is a WebGL context — keeping dozens live trips
       // browser limits, especially on iOS Safari).
-      const embedUrl = `/embed/${escHtml(t.owner)}?token=${escHtml(t.tokenId)}&landing=1`;
+      const embedUrl = `/embed/${escHtml(t.owner)}?token=${escHtml(t.tokenId)}&thumb=1`;
       return `
         <div class="tile"
              data-token-id="${escHtml(t.tokenId)}"

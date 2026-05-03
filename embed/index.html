@@ -225,6 +225,11 @@
     // light, and exposes a postMessage handler that captures the live
     // stage at 4096×4096 PNG for use as a Twitter/Telegram avatar.
     if (params.get('pfp') === '1') window.__dustopiaPfp = true;
+    // Thumbnail mode: small iframe tiles in /pfp feed and /gallery.
+    // Same GRID as the main canvas (so atlas R2 cache hits) but DPR
+    // capped at 1, preserveDrawingBuffer turned off, no preview-cap or
+    // MP4 capture wiring. Each thumb iframe goes from ~250 MB to ~70 MB.
+    if (params.get('thumb') === '1') window.__dustopiaThumb = true;
     const selRaw = params.get('sel');
     if (selRaw) {
       try {
@@ -1442,7 +1447,7 @@ async function main() {
   // if R2 already has a capture for this wallet (HEAD check inside) and
   // skipped entirely in editor preview mode so drafts don't overwrite
   // the canonical OpenSea grid image.
-  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaLanding) {
+  if (!window.__dustopiaPreview && !window.__dustopiaNocache && !window.__dustopiaLanding && !window.__dustopiaThumb) {
     // In fresh mode the holder explicitly asked to overwrite — skip the
     // hasCachedPreview short-circuit so the new capture lands on top of
     // whatever's currently in R2.
@@ -1497,7 +1502,13 @@ async function main() {
   // drawImage(canvas, ...) at any moment. Without this the buffer is cleared
   // post-swap and toBlob() / drawImage() return black mid-frame. Minor perf
   // tax (~5-10%) but acceptable at 60fps on this workload.
-  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true });
+  //
+  // Thumb mode skips this — feed/gallery iframes never capture, and
+  // preserveDrawingBuffer doubles the canvas memory footprint (the
+  // browser keeps a second copy after each swap). Big win when you
+  // have a dozen tile iframes on /pfp / /gallery.
+  const _PRESERVE = !window.__dustopiaThumb;
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: _PRESERVE });
   if (!gl) {
     showError('<b>WebGL2 not available.</b> Try a recent Chrome, Firefox, or Safari.');
     return;
@@ -1516,9 +1527,11 @@ async function main() {
   const _shorterSide = Math.max(1, Math.min(window.innerWidth, window.innerHeight));
   let DPR = window.__dustopiaPfp
     ? Math.min(8, Math.max(2, Math.ceil(2400 / _shorterSide)))
-    : LANDING_MODE
-      ? 1.5
-      : Math.min(window.devicePixelRatio || 1, 2);
+    : window.__dustopiaThumb
+      ? 1                              // ~200 px tile, DPR 1 is plenty + halves backbuffer memory
+      : LANDING_MODE
+        ? 1.5
+        : Math.min(window.devicePixelRatio || 1, 2);
   let W = 0, H = 0;
   function resize() {
     W = window.innerWidth; H = window.innerHeight;
