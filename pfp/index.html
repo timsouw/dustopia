@@ -411,8 +411,10 @@
     background:linear-gradient(135deg, #f0f0f3 0%, #e2e2e6 100%);
     border-color:rgba(0,0,0,.04);
   }
-  .feed-thumb img {
+  .feed-thumb img,
+  .feed-thumb iframe {
     width:100%; height:100%; object-fit:cover; display:block;
+    border:0; pointer-events:none;
   }
   .feed-meta {
     display:flex; flex-direction:column; align-items:center; gap:2px;
@@ -816,19 +818,19 @@
         totalN.textContent = total.toLocaleString('en-US').replace(/,/g, ' ');
         totalEl.hidden = false;
       }
-      // Per-tile preview-cap thumbnail. /api/preview-cap/<addr> returns
-      // the captured WebP if R2 has it; if not it 404's and onerror swaps
-      // to the brand-mark SVG so the tile never shows a broken-image
-      // icon. The preview-cap is populated by every /pfp render now
-      // (see embed: __dustopiaPfp no longer in the upload-skip list).
+      // Per-tile live sphere via iframe — same renderer as /embed,
+      // playing the R2-cached loop. No static WebP / GIF anymore;
+      // the loop blob is shared with the main canvas, so the feed
+      // tile and the main render are guaranteed identical.
+      // ?landing=1 keeps the iframe in low-DPR memory-tight mode
+      // (hero-style) so dozens of tiles don't blow up the page.
       ul.innerHTML = list.map(e => `
         <li>
           <a class="feed-link" href="#${e.addr}" data-addr="${e.addr}">
             <div class="feed-thumb">
-              <img src="${API_URL}/api/preview-cap/${e.addr}"
-                   alt="sphere of ${shortAddr(e.addr)}"
-                   loading="lazy" decoding="async"
-                   onerror="this.onerror=null;this.src='${BRAND_MARK_SVG}';">
+              <iframe src="/embed/${e.addr}?landing=1"
+                      loading="lazy"
+                      title="sphere of ${shortAddr(e.addr)}"></iframe>
             </div>
             <div class="feed-meta">
               <span class="feed-addr">${shortAddr(e.addr)}</span>

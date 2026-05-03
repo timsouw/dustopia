@@ -190,11 +190,14 @@
   .tile:hover { transform:scale(1.02); border-color:rgba(255,255,255,.22); }
   body.light .tile:hover { border-color:rgba(0,0,0,.22); }
 
-  .tile img {
+  .tile img,
+  .tile iframe {
     position:absolute; inset:0;
     width:100%; height:100%;
     object-fit:cover;
     display:block;
+    border:0;
+    pointer-events:none;
     transition:filter 260ms;
   }
 
@@ -273,7 +276,8 @@
     .modal-body { padding:18px 18px 20px; }
   }
   body.light .modal-hero { background:#e9e9ec; border-bottom-color:rgba(0,0,0,.06); }
-  .modal-hero img { width:100%; height:100%; object-fit:cover; display:block; }
+  .modal-hero img,
+  .modal-hero iframe { width:100%; height:100%; object-fit:cover; display:block; border:0; }
   .modal-body {
     padding:22px 24px 24px;
     overflow-y:auto;
@@ -508,11 +512,8 @@
       `<div class="error-state">${escHtml(msg)}</div>`;
   }
 
-  // Tiny transparent placeholder used to drop an animated WebP off-CPU
-  // when its tile scrolls far enough away from the viewport.
-  const BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
-
-  // Render circular tiles, one per token. The img loads its preview URL
+  // Render circular tiles, one per token. Each tile is a live WebGL
+  // iframe (same renderer as /embed) playing the R2-cached loop.
   // eagerly with native lazy-loading — the previous IntersectionObserver
   // gating dropped first paint on iOS Safari (the observer didn't fire
   // for already-on-screen tiles in some cases) and left users staring
@@ -526,17 +527,21 @@
       const stat = (t.tokens != null && t.collections != null)
         ? `${t.tokens}t · ${t.collections}c`
         : `${escHtml(shortAddr(t.owner))}`;
-      const previewUrl = `${API_URL}/api/preview/${escHtml(t.tokenId)}`;
+      // Live sphere via iframe — same renderer as /embed, playing the
+      // R2-cached loop. data-src holds the real URL so the IO unloader
+      // can swap to about:blank when the tile scrolls far off-screen
+      // (each iframe is a WebGL context — keeping dozens live trips
+      // browser limits, especially on iOS Safari).
+      const embedUrl = `/embed/${escHtml(t.owner)}?token=${escHtml(t.tokenId)}&landing=1`;
       return `
         <div class="tile"
              data-token-id="${escHtml(t.tokenId)}"
              data-owner="${escHtml(t.owner)}"
              title="Dustopia #${escHtml(t.tokenId)}">
-          <img alt="Dustopia #${escHtml(t.tokenId)}"
-               src="${previewUrl}"
-               data-src="${previewUrl}"
-               loading="lazy"
-               decoding="async">
+          <iframe title="Dustopia #${escHtml(t.tokenId)}"
+                  src="about:blank"
+                  data-src="${embedUrl}"
+                  loading="lazy"></iframe>
           <div class="tile-overlay">
             <span class="name">Dustopia #${escHtml(t.tokenId)}</span>
             <span class="sub">${stat}</span>
@@ -546,17 +551,22 @@
     const grid = document.getElementById('grid');
     grid.innerHTML = `<div class="token-grid">${cards}</div>`;
 
-    // Off-screen unloader. rootMargin is generous (600px) so a fast
-    // scroll doesn't tear animations on tiles re-entering the viewport.
+    // Off-screen unloader. Each tile is now a full WebGL iframe — keeping
+    // dozens active trips browser context limits (iOS Safari ~16). When
+    // a tile leaves the viewport (+ rootMargin slack so fast scrolls
+    // don't tear), swap iframe src → about:blank, which destroys the GL
+    // context. Swap back when it's about to come into view.
+    const BLANK_FRAME = 'about:blank';
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         const tile = e.target;
-        const img = tile.querySelector('img');
-        if (!img) continue;
+        const fr   = tile.querySelector('iframe');
+        if (!fr) continue;
         if (e.isIntersecting) {
-          if (img.src !== img.dataset.src) img.src = img.dataset.src;
+          if (fr.src !== fr.dataset.src && fr.dataset.src) fr.src = fr.dataset.src;
         } else {
-          if (img.src !== BLANK_IMG) img.src = BLANK_IMG;
+          // endsWith because some browsers normalize about:blank to a full URL
+          if (!fr.src.endsWith(BLANK_FRAME)) fr.src = BLANK_FRAME;
         }
       }
     }, { rootMargin: '600px 0px', threshold: 0 });
@@ -586,11 +596,13 @@
 
   function openModal(tokenId, owner) {
     if (!tokenId) return;
-    modalHero.innerHTML = `
-      <img src="${API_URL}/api/preview/${escHtml(tokenId)}"
-           alt="Dustopia #${escHtml(tokenId)}">`;
+    const ownerSafe = escHtml(owner || '');
+    const tokenSafe = escHtml(tokenId);
+    modalHero.innerHTML = ownerSafe
+      ? `<iframe title="Dustopia #${tokenSafe}" src="/embed/${ownerSafe}?token=${tokenSafe}"></iframe>`
+      : `<img src="${API_URL}/api/preview/${tokenSafe}" alt="Dustopia #${tokenSafe}">`;
     modalBody.innerHTML = `
-      <div class="modal-title">Dustopia #${escHtml(tokenId)}</div>
+      <div class="modal-title">Dustopia #${tokenSafe}</div>
       <div class="modal-desc">Loading…</div>`;
     modal.classList.add('open');
     modal.setAttribute('aria-hidden', 'false');
