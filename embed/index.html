@@ -327,7 +327,16 @@ const _SIZE_MUL_OVERRIDE = (typeof window !== 'undefined' && (() => {
 // even at 1.5×. 2.0 closes them without smearing thumbnails.
 // Override via ?ps=N for the /test bench.
 
-const GRID             = _GRID_OVERRIDE || (LANDING_MODE ? 128 : (IS_MOBILE ? 128 : 192));  // 192² = 36864 particles per image; mobile 128² = 16384; landing 128² (was 96²) for crisper hero
+// GRID is now fixed at 192 across all modes — landing, mobile, thumb,
+// configure preview, everything. Atlas + loop entries in R2 are keyed
+// by addr+fp+grid; if mobile/landing used 128 while desktop main used
+// 192, every cross-context lookup missed the cache and tried to rebuild
+// in-iframe (30 s of throttled image fetches). Standardising on a single
+// grid eliminates that entire class of bug. Memory cost on mobile: GPU
+// atlas grows from 128² → 192² per token (~2× the texture data); offset
+// by every other render pipeline now hitting cache instead of rebuilding.
+// _GRID_OVERRIDE (?grid=N) on /test still respected for A/B benching.
+const GRID             = _GRID_OVERRIDE || 192;
 // HISTORY_LEN was sized for SHEAR_FACTOR=0.55 (needed GRID + GRID·0.55
 // rows). Since SHEAR is now 0, we only need GRID rows + small slack
 // for camera reveals. Halving this halves the GPU memory of the two
@@ -2645,16 +2654,18 @@ async function main() {
           return;
         }
       }
-      // Cache miss — kick off a bake. The atlas PUT also triggers one in
-      // the background, so this POST may be a no-op (200, reason=exists)
-      // by the time it lands. That's fine — the next GET succeeds.
+      // Cache miss / decode reject (version mismatch). Kick off a bake.
+      // The atlas PUT also triggers one in the background and the worker
+      // edge-cache-purges after re-bake, so the next GET pulls fresh.
       fetch(bakeUrl(), { method: 'POST' }).catch(() => {});
-      // Poll until ready or we give up.
-      const POLL_MS = 1500;
-      const POLL_MAX = 17;     // ~25 s budget, more than enough for N=512 (350 ms bake)
+      // Poll until ready or we give up. Tighter ceiling than before so
+      // a stuck thumbnail iframe doesn't sit allocating forever — the
+      // worker bake is <1s for any N, so 8 attempts × 1.5s is plenty.
+      const POLL_MS  = 1500;
+      const POLL_MAX = 8;
       for (let i = 0; i < POLL_MAX; i++) {
         await new Promise(res => setTimeout(res, POLL_MS));
-        r = await fetch(loopUrl(), { method: 'GET' });
+        r = await fetch(loopUrl(), { method: 'GET', cache: 'no-store' });
         if (!r.ok) continue;
         const buf = await r.arrayBuffer();
         if (decodeLoopBuffer(buf)) {
@@ -2662,11 +2673,11 @@ async function main() {
           return;
         }
       }
-      // Polling timed out — leave playbackReady=false; frame() falls
-      // back to live physics. Worse cold-path UX than playback, but
-      // still functional. Should be rare (only on persistent worker
-      // errors / R2 outage).
-    } catch { /* swallow — fall back to live physics */ }
+      // Timed out. Free the playback buffers so they don't sit in JS
+      // heap allocated-but-unused — a thumb-mode iframe where polling
+      // failed shouldn't keep eating ~22 MB forever waiting on a
+      // playback that will never come.
+    } catch { /* swallow */ }
   }
   if (LOOP_USABLE) fetchLoopOrTriggerBake();
 

@@ -787,6 +787,10 @@ async function handleMetadata(rawTokenId, request, env) {
 // V1 is unauthenticated: anyone can PUT for any address. The size cap and
 // MIME validation prevent random garbage from blowing up the bucket. Under
 // adversarial load we'd add a SIWE signature requirement here.
+// Frontend now standardises on GRID=192 across every mode — landing,
+// mobile, thumb, /configure preview. 128 is kept in the accept set for
+// backwards-compat with any /test bench requests, but no production
+// path will ever PUT or GET it.
 const ATLAS_GRIDS_OK = new Set([128, 192]);
 const ATLAS_TOKEN_LIMIT = 1024;        // mirror MAX_TOKENS in index.html
 const ATLAS_META_MAX = 256 * 1024;     // 256 KiB ceiling for the JSON meta
@@ -979,10 +983,11 @@ async function handleAtlasPut(addr, grid, wantMeta, fp, request, env, ctx) {
 
   // When the meta JSON for this (addr, fp) lands, kick off a server-side
   // bake in the background — by the time anyone GETs /api/loop/<addr> the
-  // blob is ready. No-op if the loop already exists. Best-effort: failures
-  // are swallowed because the browser-side recording is still a fallback.
+  // blob is ready. No-op if the loop already exists at the current
+  // version; re-bake + edge-cache purge if version is stale. originUrl
+  // gives bakeAndStore the worker origin to construct a purge key.
   if (wantMeta && ctx && typeof ctx.waitUntil === 'function') {
-    ctx.waitUntil(bakeAndStore(addr, fp, env).catch(() => {}));
+    ctx.waitUntil(bakeAndStore(addr, fp, env, { originUrl: request.url }).catch(() => {}));
   }
 
   return jsonResponse({ ok: true, bytes: buf.byteLength, encoded: isGzipped ? ce : null }, request);
@@ -1183,10 +1188,30 @@ async function gzipBytes(u8) {
   }
 }
 
+// Purges the per-region edge cache entry for /api/loop/<addr>?fp=<fp>.
+// Called after a successful re-bake so visitors don't keep getting the
+// stale v1 blob from caches.default for the next 365 days. Best-effort —
+// only invalidates this colocation; other regions roll over as their
+// cache misses naturally during the next GET. In practice, the same
+// edge that ran the bake is also the one that just served the stale
+// GET to the client that triggered it, so this catches the hot path.
+async function purgeLoopEdgeCache(addr, fp, originUrl) {
+  if (!originUrl) return;
+  try {
+    const o = new URL(originUrl);
+    const fpQ = (fp && fp !== 'all') ? `?fp=${fp}` : '';
+    const url = `${o.origin}/api/loop/${addr.toLowerCase()}${fpQ}`;
+    await caches.default.delete(new Request(url, { method: 'GET' }));
+  } catch { /* swallow — purge is best-effort */ }
+}
+
 // runs the actual bake. Returns { ok, reason, bytes? }.
 // Force=true skips the existence check (used to overwrite a stale entry).
-async function bakeAndStore(addr, fp, env, { force = false } = {}) {
+// originUrl is any URL pointing at this worker — used to construct the
+// edge-cache key we need to purge after re-bake.
+async function bakeAndStore(addr, fp, env, { force = false, originUrl = null } = {}) {
   const key = loopKey(addr, fp);
+  let needsPurge = force;   // any code path that writes a new blob must purge
   if (!force) {
     // Read first 5 bytes of the existing blob (R2 supports range reads)
     // to verify the on-disk version matches our current LOOP_VERSION. If
@@ -1206,6 +1231,9 @@ async function bakeAndStore(addr, fp, env, { force = false } = {}) {
             const head = await env.ATLAS.head(key).catch(() => null);
             return { ok: true, reason: 'exists', bytes: head ? head.size : null };
           }
+          // Existing blob has the wrong version — proceed to re-bake AND
+          // purge the edge cache so the next GET pulls the fresh bytes.
+          needsPurge = true;
         }
       } catch { /* fall through to re-bake */ }
     }
@@ -1237,6 +1265,9 @@ async function bakeAndStore(addr, fp, env, { force = false } = {}) {
     return { ok: false, reason: `bake produced ${body.byteLength} bytes, over LOOP_BIN_MAX` };
   }
   await env.ATLAS.put(key, body, { httpMetadata });
+  // Purge any stale edge-cache entry so the freshly-baked bytes win on
+  // the next GET. Skipped on first-ever bake (no purge needed).
+  if (needsPurge) await purgeLoopEdgeCache(addr, fp, originUrl);
   return { ok: true, reason: 'baked', bytes: body.byteLength };
 }
 
@@ -1251,7 +1282,7 @@ async function handleBake(addr, request, env, ctx) {
     return errorResponse(400, 'invalid fp', request);
   }
   const force = url.searchParams.get('force') === '1';
-  const result = await bakeAndStore(addr, fp, env, { force });
+  const result = await bakeAndStore(addr, fp, env, { force, originUrl: request.url });
   const status = result.ok ? 200 : 409;
   return jsonResponse(result, request, { status });
 }
@@ -1529,7 +1560,7 @@ async function handleFeedAdd(rawAddr, request, env, ctx) {
   // run if there's no atlas meta yet (caller will retry once their atlas
   // upload finishes — handleAtlasPut also schedules a bake).
   if (ctx && typeof ctx.waitUntil === 'function') {
-    ctx.waitUntil(bakeAndStore(addr, 'all', env).catch(() => {}));
+    ctx.waitUntil(bakeAndStore(addr, 'all', env, { originUrl: request.url }).catch(() => {}));
   }
 
   return jsonResponse({ ok: true, count: trimmed.length, total }, request);
