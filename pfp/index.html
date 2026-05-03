@@ -400,6 +400,7 @@
     background:rgba(0,0,0,.03);
   }
   .feed-thumb {
+    position:relative;
     width:100%;
     aspect-ratio:1 / 1;
     border-radius:50%;
@@ -414,10 +415,17 @@
   .feed-thumb img,
   .feed-thumb video,
   .feed-thumb iframe {
+    position:absolute; inset:0;
     width:100%; height:100%; object-fit:cover; display:block;
     border:0; pointer-events:none;
     background:transparent;
   }
+  /* Video starts at opacity:0 (rendered but invisible) so autoplay
+     engages while the <img> beneath is what the user sees. On 'canplay'
+     JS sets opacity:1 to reveal the live video. Using display:none here
+     would block autoplay in some browsers. */
+  .feed-thumb video { opacity:0; transition:opacity 200ms; }
+  .feed-thumb video.canplay { opacity:1; }
   .feed-meta {
     display:flex; flex-direction:column; align-items:center; gap:2px;
     width:100%;
@@ -820,24 +828,30 @@
         totalN.textContent = total.toLocaleString('en-US').replace(/,/g, ' ');
         totalEl.hidden = false;
       }
-      // Per-tile thumbnail strategy: <video> first, <img> fallback.
-      //   - <video> serves the 30 s MP4/WebM captured via MediaRecorder
-      //     (almost-free hardware-decoded playback, no per-tile WebGL).
-      //   - On error / unsupported codec / 404, swap to /api/preview-cap
-      //     (the 6 s animated WebP) — identical visual, shorter loop.
-      //   - That preview-cap can ALSO 404; in that case swap once more
-      //     to the brand-mark SVG so the tile never shows broken-image.
-      // The fallback chain is wired with a delegated 'error' listener
-      // below — keeps innerHTML free of escaping landmines.
+      // Per-tile rendering uses an img+video stack. Pattern:
+      //   - <img> shows preview-cap WebP, with onerror swap to brand SVG.
+      //     This is the BASE that always renders something visible —
+      //     even when no video exists for the wallet, even when video
+      //     codec isn't supported by this browser, even when the worker
+      //     /api/video endpoint isn't deployed yet.
+      //   - <video> tries to load /api/video/<addr> in the background.
+      //     On 'canplay' (video has enough data to start playing) we
+      //     hide the <img> and reveal the <video>. On any failure mode
+      //     the <video> stays display:none and the <img> remains.
+      // No error swaps, no DOM replacement, no race conditions — just
+      // two elements where the better one wins by feature detection.
       ul.innerHTML = list.map(e => `
         <li>
           <a class="feed-link" href="#${e.addr}" data-addr="${e.addr}">
             <div class="feed-thumb">
+              <img src="${API_URL}/api/preview-cap/${e.addr}"
+                   alt="sphere of ${shortAddr(e.addr)}"
+                   loading="lazy" decoding="async"
+                   onerror="this.onerror=null;this.src='${BRAND_MARK_SVG}';">
               <video data-addr="${e.addr}"
                      src="${API_URL}/api/video/${e.addr}"
                      autoplay muted loop playsinline
-                     preload="metadata"
-                     poster="${API_URL}/api/preview-cap/${e.addr}"></video>
+                     preload="metadata"></video>
             </div>
             <div class="feed-meta">
               <span class="feed-addr">${shortAddr(e.addr)}</span>
@@ -859,24 +873,16 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
-  // Video → preview-cap → SVG fallback. <video> emits 'error' events
-  // on the element itself when the source fails (404, unsupported
-  // codec, network), so the delegated listener swaps to <img>. The
-  // <img>'s own error then lands on the brand-mark SVG via inline
-  // onerror — that part's safe because the URL is data: with no quotes.
-  // Listener uses capture phase because 'error' doesn't bubble.
-  document.getElementById('feedList').addEventListener('error', (ev) => {
+  // Reveal the <video> only when it actually has playable data. If
+  // the video URL 404s (worker not deployed, no capture yet) or the
+  // codec isn't supported (Safari + webm), 'canplay' never fires and
+  // the <img> stays visible. Capture phase because 'canplay' doesn't
+  // bubble.
+  document.getElementById('feedList').addEventListener('canplay', (ev) => {
     const v = ev.target;
     if (!(v instanceof HTMLVideoElement)) return;
-    const addr = v.dataset.addr;
-    if (!addr) return;
-    const img = document.createElement('img');
-    img.src = `${API_URL}/api/preview-cap/${addr}`;
-    img.alt = `sphere of ${shortAddr(addr)}`;
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    img.onerror = function () { this.onerror = null; this.src = BRAND_MARK_SVG; };
-    v.replaceWith(img);
+    v.classList.add('canplay');
+    v.play().catch(() => {});
   }, true);
 
   loadFeed();

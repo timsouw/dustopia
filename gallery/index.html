@@ -202,6 +202,11 @@
     background:transparent;
     transition:filter 260ms;
   }
+  /* Video starts invisible (opacity:0) so autoplay still engages but
+     the <img> below shows. On 'canplay' JS adds .canplay → opacity:1.
+     Using display:none would block autoplay in Chrome / iOS Safari. */
+  .tile video { opacity:0; transition:opacity 200ms; }
+  .tile video.canplay { opacity:1; }
 
   /* Hover overlay: blur the sphere behind, drop the token name on top.
      We use backdrop-filter so the blur applies to whatever the img is
@@ -529,12 +534,11 @@
       const stat = (t.tokens != null && t.collections != null)
         ? `${t.tokens}t · ${t.collections}c`
         : `${escHtml(shortAddr(t.owner))}`;
-      // Per-tile: <video> with the holder's captured 30 s loop. On
-      // error / unsupported codec we swap to /api/preview/<id> (animated
-      // WebP that includes the SVG fallback inside the worker). Both are
-      // hardware-cheap — playback uses the browser's video decoder, no
-      // per-tile WebGL context. The IntersectionObserver below pauses
-      // off-screen videos to save CPU on long scrolls.
+      // Per-tile: img+video stack. <img> is always visible (preview-cap
+      // animated WebP, with SVG fallback baked into the worker
+      // /api/preview endpoint). <video> probes /api/video/<owner>; on
+      // 'canplay' it covers the <img>. If video can't load (worker not
+      // deployed, codec mismatch, no capture yet), <img> stays.
       const ownerAddr  = String(t.owner || '').toLowerCase();
       const videoUrl   = `${API_URL}/api/video/${escHtml(ownerAddr)}`;
       const previewUrl = `${API_URL}/api/preview/${escHtml(t.tokenId)}`;
@@ -543,10 +547,13 @@
              data-token-id="${escHtml(t.tokenId)}"
              data-owner="${escHtml(t.owner)}"
              title="Dustopia #${escHtml(t.tokenId)}">
-          <video data-fallback="${previewUrl}"
-                 src="${videoUrl}"
+          <img alt="Dustopia #${escHtml(t.tokenId)}"
+               src="${previewUrl}"
+               data-src="${previewUrl}"
+               loading="lazy"
+               decoding="async">
+          <video src="${videoUrl}"
                  data-src="${videoUrl}"
-                 poster="${previewUrl}"
                  autoplay muted loop playsinline
                  preload="metadata"></video>
           <div class="tile-overlay">
@@ -588,22 +595,14 @@
     }, { rootMargin: '600px 0px', threshold: 0 });
     grid.querySelectorAll('.tile').forEach((tile) => io.observe(tile));
 
-    // <video> error fallback → swap the element with an <img> pointing
-    // at the per-token preview. Same delegated-capture pattern as /pfp
-    // because 'error' events don't bubble. Inline onerror on <img> uses
-    // a data: URL so no escaping landmines.
-    grid.addEventListener('error', (ev) => {
+    // Reveal <video> only when it has playable data. Until then the
+    // <img> below stays visible. Capture phase because 'canplay' doesn't
+    // bubble.
+    grid.addEventListener('canplay', (ev) => {
       const v = ev.target;
       if (!(v instanceof HTMLVideoElement)) return;
-      const fallback = v.dataset.fallback;
-      if (!fallback) return;
-      const img = document.createElement('img');
-      img.alt = v.title || '';
-      img.src = fallback;
-      img.dataset.src = fallback;
-      img.loading = 'lazy';
-      img.decoding = 'async';
-      v.replaceWith(img);
+      v.classList.add('canplay');
+      v.play().catch(() => {});
     }, true);
 
     // Click → modal. Delegated so we don't pin a listener per tile.
