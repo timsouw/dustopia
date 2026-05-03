@@ -191,6 +191,7 @@
   body.light .tile:hover { border-color:rgba(0,0,0,.22); }
 
   .tile img,
+  .tile video,
   .tile iframe {
     position:absolute; inset:0;
     width:100%; height:100%;
@@ -198,6 +199,7 @@
     display:block;
     border:0;
     pointer-events:none;
+    background:transparent;
     transition:filter 260ms;
   }
 
@@ -527,21 +529,26 @@
       const stat = (t.tokens != null && t.collections != null)
         ? `${t.tokens}t · ${t.collections}c`
         : `${escHtml(shortAddr(t.owner))}`;
-      // Static animated WebP from preview-cap. Live iframe-per-tile
-      // didn't scale — hundreds of WebGL contexts trip browser caps.
-      // The captured WebP comes from the same renderer that paints the
-      // detail page, so the visual matches without the cost.
+      // Per-tile: <video> with the holder's captured 30 s loop. On
+      // error / unsupported codec we swap to /api/preview/<id> (animated
+      // WebP that includes the SVG fallback inside the worker). Both are
+      // hardware-cheap — playback uses the browser's video decoder, no
+      // per-tile WebGL context. The IntersectionObserver below pauses
+      // off-screen videos to save CPU on long scrolls.
+      const ownerAddr  = String(t.owner || '').toLowerCase();
+      const videoUrl   = `${API_URL}/api/video/${escHtml(ownerAddr)}`;
       const previewUrl = `${API_URL}/api/preview/${escHtml(t.tokenId)}`;
       return `
         <div class="tile"
              data-token-id="${escHtml(t.tokenId)}"
              data-owner="${escHtml(t.owner)}"
              title="Dustopia #${escHtml(t.tokenId)}">
-          <img alt="Dustopia #${escHtml(t.tokenId)}"
-               src="${previewUrl}"
-               data-src="${previewUrl}"
-               loading="lazy"
-               decoding="async">
+          <video data-fallback="${previewUrl}"
+                 src="${videoUrl}"
+                 data-src="${videoUrl}"
+                 poster="${previewUrl}"
+                 autoplay muted loop playsinline
+                 preload="metadata"></video>
           <div class="tile-overlay">
             <span class="name">Dustopia #${escHtml(t.tokenId)}</span>
             <span class="sub">${stat}</span>
@@ -553,23 +560,51 @@
 
     // Off-screen unloader. rootMargin is generous so a fast scroll
     // doesn't tear animations on tiles re-entering the viewport.
-    // Animated WebPs that scroll far away get swapped to a 1×1 blank
-    // so the browser frees the WebP decoder; coming back into view
-    // restores the real src.
+    // Videos that scroll far away get paused (frees the decoder thread
+    // but keeps the source so re-entering doesn't refetch); <img> tiles
+    // (the fallback path when a video 404s or codec mismatches) swap to
+    // a 1×1 blank to drop the WebP decoder.
     const BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         const tile = e.target;
-        const img  = tile.querySelector('img');
-        if (!img) continue;
-        if (e.isIntersecting) {
-          if (img.src !== img.dataset.src) img.src = img.dataset.src;
-        } else {
-          if (img.src !== BLANK_IMG) img.src = BLANK_IMG;
+        const v   = tile.querySelector('video');
+        const img = tile.querySelector('img');
+        if (v) {
+          if (e.isIntersecting) {
+            if (v.paused) v.play().catch(() => {});
+          } else {
+            if (!v.paused) v.pause();
+          }
+        }
+        if (img) {
+          if (e.isIntersecting) {
+            if (img.src !== img.dataset.src && img.dataset.src) img.src = img.dataset.src;
+          } else {
+            if (img.src !== BLANK_IMG) img.src = BLANK_IMG;
+          }
         }
       }
     }, { rootMargin: '600px 0px', threshold: 0 });
     grid.querySelectorAll('.tile').forEach((tile) => io.observe(tile));
+
+    // <video> error fallback → swap the element with an <img> pointing
+    // at the per-token preview. Same delegated-capture pattern as /pfp
+    // because 'error' events don't bubble. Inline onerror on <img> uses
+    // a data: URL so no escaping landmines.
+    grid.addEventListener('error', (ev) => {
+      const v = ev.target;
+      if (!(v instanceof HTMLVideoElement)) return;
+      const fallback = v.dataset.fallback;
+      if (!fallback) return;
+      const img = document.createElement('img');
+      img.alt = v.title || '';
+      img.src = fallback;
+      img.dataset.src = fallback;
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      v.replaceWith(img);
+    }, true);
 
     // Click → modal. Delegated so we don't pin a listener per tile.
     grid.addEventListener('click', onGridClick);

@@ -694,6 +694,99 @@ async function handlePreviewCap(addr, request, env, ctx) {
   return errorResponse(405, 'method not allowed', request);
 }
 
+// =====================================================================
+// VIDEO LOOP — captured MP4 / WebM of the live sphere, stored in R2 and
+// served to feed/gallery thumbnails as <video autoplay muted loop>. The
+// video plays via the browser's hardware decoder (negligible CPU/GPU)
+// instead of a per-tile WebGL context, which is what burned through 1+ GB
+// of memory in the iframe-tile experiment.
+//
+// Codec strategy:
+//   - Browsers RECORD via MediaRecorder, which on Chrome usually outputs
+//     video/webm;codecs=vp9 and on Safari outputs video/mp4;codecs=avc1.
+//     We accept both. Safari can't play webm, so a Safari visitor on a
+//     wallet captured by a Chrome user falls back to <img preview-cap>
+//     via <video onerror>.
+//   - 30 s loop at 30 fps, 2.5 Mbps → ~10 MiB MP4 / ~7 MiB webm.
+// =====================================================================
+const VIDEO_OK_TYPES = ['video/mp4', 'video/webm'];
+const VIDEO_MAX      = 20 * 1024 * 1024;   // 20 MiB ceiling
+const VIDEO_MIN      = 50 * 1024;          // 50 KiB floor — weeds out empty fragments
+
+// Wire-format sniffing so we trust httpMetadata content-type. MP4
+// containers start with `....ftyp` (any 4 bytes, then 'ftyp' at offset
+// 4). WebM (Matroska) starts with the EBML magic 0x1A 0x45 0xDF 0xA3.
+function detectVideoType(buf) {
+  const sig = new Uint8Array(buf, 0, Math.min(16, buf.byteLength));
+  if (sig.length >= 8
+   && sig[4] === 0x66 && sig[5] === 0x74 && sig[6] === 0x79 && sig[7] === 0x70) return 'video/mp4';
+  if (sig.length >= 4
+   && sig[0] === 0x1A && sig[1] === 0x45 && sig[2] === 0xDF && sig[3] === 0xA3) return 'video/webm';
+  return null;
+}
+
+async function handleVideo(addr, request, env, ctx) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    return errorResponse(400, 'invalid address', request);
+  }
+  const key = `video/${addr.toLowerCase()}.bin`;
+
+  if (request.method === 'HEAD') {
+    const head = await env.ATLAS.head(key);
+    if (!head) return errorResponse(404, 'no video cached', request);
+    const ct = (head.httpMetadata && head.httpMetadata.contentType) || 'video/mp4';
+    return new Response(null, {
+      status: 200,
+      headers: {
+        ...corsHeaders(request),
+        'Content-Type':   ct,
+        'Content-Length': String(head.size),
+      },
+    });
+  }
+
+  if (request.method === 'GET') {
+    const obj = await env.ATLAS.get(key);
+    if (!obj) return errorResponse(404, 'no video cached', request);
+    const headers = new Headers({
+      'Access-Control-Allow-Origin': '*',
+      // 1 hour TTL — video is captured per-render, can be replaced when
+      // the holder hits Refresh sphere. Same shape as preview-cap.
+      'Cache-Control':               'public, max-age=3600',
+      'Accept-Ranges':               'bytes',
+    });
+    obj.writeHttpMetadata(headers);
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'video/mp4');
+    return new Response(obj.body, { headers });
+  }
+
+  if (request.method === 'PUT') {
+    const ct = (request.headers.get('Content-Type') || '').toLowerCase().split(';')[0].trim();
+    if (!VIDEO_OK_TYPES.includes(ct)) {
+      return errorResponse(415, `expected one of ${VIDEO_OK_TYPES.join(', ')}`, request);
+    }
+    const lenHdr = request.headers.get('Content-Length');
+    if (!lenHdr) return errorResponse(411, 'Content-Length required', request);
+    const len = parseInt(lenHdr, 10);
+    if (!Number.isFinite(len) || len < 0) return errorResponse(400, 'invalid Content-Length', request);
+    if (len > VIDEO_MAX) return errorResponse(413, `body too large (${len} > ${VIDEO_MAX})`, request);
+    if (len < VIDEO_MIN) return errorResponse(400, 'body too small', request);
+
+    const buf = await request.arrayBuffer();
+    if (buf.byteLength !== len)        return errorResponse(400, 'body length mismatch', request);
+    const detected = detectVideoType(buf);
+    if (!detected)                     return errorResponse(400, 'unrecognized video format (need MP4 or WebM)', request);
+    if (detected !== ct)               return errorResponse(400, `body is ${detected} but Content-Type is ${ct}`, request);
+
+    await env.ATLAS.put(key, buf, {
+      httpMetadata: { contentType: detected },
+    });
+    return jsonResponse({ ok: true, bytes: buf.byteLength, type: detected }, request);
+  }
+
+  return errorResponse(405, 'method not allowed', request);
+}
+
 // Best-effort owner-collection summary derived from the cached atlas meta
 // stored in R2. Returns { tokens, collections } if any meta is available,
 // or null if the address has never been built. Reads desktop grid first
@@ -1649,6 +1742,17 @@ export default {
         return errorResponse(429, 'rate limit exceeded', request);
       }
       return handlePreviewCap(previewCapMatch[1], request, env, ctx);
+    }
+
+    // MP4 / WebM video loop captured via MediaRecorder. Same upload
+    // shape as preview-cap. Served to feed/gallery <video> tiles.
+    const videoMatch = path.match(/^\/api\/video\/([^/]+)\/?$/);
+    if (videoMatch) {
+      const bucket = request.method === 'PUT' ? 'put' : 'general';
+      if (!(await rateLimitOk(request, env, bucket))) {
+        return errorResponse(429, 'rate limit exceeded', request);
+      }
+      return handleVideo(videoMatch[1], request, env, ctx);
     }
 
     // Per-token config: GET is public, PUT is owner-gated via signature.

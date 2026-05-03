@@ -1158,6 +1158,94 @@ async function tryCaptureAndUploadPreview(addr, opts = {}) {
   } catch (e) { dwarn('[preview] upload err', e); }
 }
 
+// =====================================================================
+// VIDEO CAPTURE — 30 s loop of the canvas via MediaRecorder, uploaded to
+// /api/video/<addr>. The R2 blob is then served as <video> in feed and
+// gallery tiles. Visitors play it via the browser's hardware decoder
+// (almost free CPU/GPU) instead of mounting a per-tile WebGL context.
+// =====================================================================
+const VIDEO_DELAY_MS  = 5000;          // wait for sphere to settle before recording
+const VIDEO_DURATION  = 30000;         // 30 s loop
+const VIDEO_FPS       = 30;
+const VIDEO_BITRATE   = 2_500_000;     // 2.5 Mbps → ~9 MiB / 30 s, comfortably under VIDEO_MAX
+
+// Pick the best codec the running browser supports. Order matters:
+// MP4 first because Safari requires it (and no other browser on iOS
+// will play webm). Chrome on macOS will fall through to webm/vp9.
+function pickVideoMimeType() {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return '';
+  const candidates = [
+    'video/mp4;codecs=avc1.42E01E',
+    'video/mp4;codecs=avc1',
+    'video/mp4',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return '';
+}
+
+// HEAD probe for an already-captured video so we don't re-record on
+// every visit. Same shape as hasCachedPreview.
+async function hasCachedVideo(addr) {
+  if (!API_URL || !addr) return false;
+  try {
+    const r = await fetch(`${API_URL}/api/video/${addr}`, { method: 'HEAD' });
+    return r.ok;
+  } catch { return false; }
+}
+
+async function captureAndUploadVideo(addr, opts = {}) {
+  if (!API_URL || !addr) return;
+  if (typeof MediaRecorder === 'undefined') return;
+  const stage = document.getElementById('stage');
+  if (!stage || typeof stage.captureStream !== 'function') return;
+
+  const mimeType = pickVideoMimeType();
+  if (!mimeType) { dwarn('[video] no supported MediaRecorder codec'); return; }
+
+  if (!opts.force && await hasCachedVideo(addr)) return;
+
+  const baseType = mimeType.split(';')[0];   // 'video/mp4' or 'video/webm'
+
+  let stream;
+  try { stream = stage.captureStream(VIDEO_FPS); }
+  catch (e) { dwarn('[video] captureStream failed', e); return; }
+
+  let recorder;
+  try { recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: VIDEO_BITRATE }); }
+  catch (e) { dwarn('[video] MediaRecorder init failed', e); return; }
+
+  const chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+
+  const stopped = new Promise(resolve => { recorder.onstop = resolve; });
+  recorder.start();
+  setTimeout(() => { try { recorder.stop(); } catch {} }, VIDEO_DURATION);
+  await stopped;
+
+  // Stop captureStream tracks so the canvas isn't held in capture mode
+  // forever (matters on long-lived /pfp pages where the user keeps the
+  // tab open after the recording completes).
+  try { stream.getTracks().forEach(t => t.stop()); } catch {}
+
+  const blob = new Blob(chunks, { type: baseType });
+  if (blob.size === 0) { dwarn('[video] zero-byte recording, skipping upload'); return; }
+
+  try {
+    const r = await fetch(`${API_URL}/api/video/${addr}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': baseType },
+      body:    blob,
+    });
+    if (!r.ok) dwarn('[video] upload', r.status, await r.text().catch(() => ''));
+    else      dbg('[video] uploaded', baseType, blob.size, 'bytes');
+  } catch (e) { dwarn('[video] upload err', e); }
+}
+
 // Listener for /configure → "save committed, please re-capture preview now".
 // Only accepts same-origin senders. Force-flag bypasses the cached-preview
 // short-circuit since the R2 entry (if any) is now stale.
@@ -1473,7 +1561,13 @@ async function main() {
     // hasCachedPreview short-circuit so the new capture lands on top of
     // whatever's currently in R2.
     const force = !!window.__dustopiaFresh;
+    // Two captures fire in parallel. Both are best-effort:
+    //   - preview-cap: 6 s animated WebP, used for OpenSea grid + as
+    //     the <img> fallback when a video isn't yet uploaded for a wallet.
+    //   - video: 30 s MP4/WebM, primary thumbnail for /pfp feed and
+    //     /gallery tiles (played as <video>, near-zero CPU).
     setTimeout(() => { tryCaptureAndUploadPreview(liveWalletAddr, { force }).catch(() => {}); }, PREVIEW_DELAY_MS);
+    setTimeout(() => { captureAndUploadVideo(liveWalletAddr,    { force }).catch(() => {}); }, VIDEO_DELAY_MS);
   }
 
   // Collapse the load panel into a small pill that stays clickable.
